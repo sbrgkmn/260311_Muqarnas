@@ -1,0 +1,168 @@
+﻿<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>260311_Muqarnas</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="controls">
+        <h1>Octagonal Muqarnas Generator</h1>
+        <p class="subtitle">Haci Kilic-first recursive build with collision-aware growth. Silver-ratio units are fixed.</p>
+
+        <div class="control-grid">
+          <label>
+            Preset
+            <select id="preset"></select>
+          </label>
+
+          <label>
+            Dome Scope
+            <select id="scope">
+              <option value="quadrant">Quadrant (90°)</option>
+              <option value="half">Half Dome (180°)</option>
+              <option value="full" selected>Full Dome (360°)</option>
+            </select>
+          </label>
+
+          <label>
+            Layers
+            <input id="layers" type="number" min="2" max="30" step="1" />
+          </label>
+
+          <label class="inline-check">
+            <input id="freezeRecursion" type="checkbox" checked />
+            Freeze Recursion (debug)
+          </label>
+
+          <label>
+            Preview Layer
+            <div class="inline-row">
+              <input id="previewLayer" type="range" min="0" max="30" step="1" />
+              <output id="previewLayerValue">0/0</output>
+            </div>
+          </label>
+
+          <button id="stepRecursion" type="button">Step +1 Layer</button>
+
+          <label>
+            Layer Height
+            <input id="layerHeight" type="number" min="0.05" max="3" step="0.05" />
+          </label>
+
+          <label>
+            Initial Radius
+            <input id="initialRadius" type="number" min="0.01" max="5" step="0.01" />
+          </label>
+
+          <label>
+            Global Ratio Scale
+            <input id="ratioScale" type="number" min="0.1" max="5" step="0.05" />
+          </label>
+
+          <label>
+            Orthogonal Rule I
+            <input id="ruleOrth1" type="text" />
+          </label>
+          <label>
+            Orthogonal Rule II
+            <input id="ruleOrth2" type="text" />
+          </label>
+          <label>
+            Diagonal Rule I
+            <input id="ruleDiag1" type="text" />
+          </label>
+          <label>
+            Diagonal Rule II
+            <input id="ruleDiag2" type="text" />
+          </label>
+          <label>
+            Secondary Rule I
+            <input id="ruleSecondary1" type="text" />
+          </label>
+          <label>
+            Secondary Rule II
+            <input id="ruleSecondary2" type="text" />
+          </label>
+
+          <label>
+            Rule II Starts at Layer
+            <input id="phaseSwitchLayer" type="number" min="0" max="30" step="1" />
+          </label>
+
+          <label>
+            Convergence Interval
+            <input id="convergenceEvery" type="number" min="0" max="12" step="1" />
+          </label>
+
+          <label>
+            Convergence Strength
+            <input id="convergenceStrength" type="number" min="0" max="1" step="0.05" />
+          </label>
+
+          <label>
+            Branch Clock Offset (22.5° steps)
+            <input id="branchClockOffset" type="number" min="0" max="15" step="1" />
+          </label>
+
+          <label>
+            Branching Morphology
+            <select id="branchingType">
+              <option value="star-secondary">Star / Secondary Axis</option>
+              <option value="star-main">Star / Main Axes</option>
+              <option value="polygon-secondary">Polygon / Secondary Axis</option>
+              <option value="polygon-main">Polygon / Main Axes</option>
+            </select>
+          </label>
+
+          <label>
+            Star Amplitude
+            <input id="starAmplitude" type="number" min="0" max="0.5" step="0.01" />
+          </label>
+
+          <label>
+            Polygon Smoothing
+            <input id="polygonSmoothing" type="number" min="0" max="1" step="0.05" />
+          </label>
+
+          <label>
+            Branch Boost (cycle complete)
+            <input id="branchBoost" type="number" min="0" max="2" step="0.01" />
+          </label>
+
+          <label>
+            Connection Type
+            <select id="connectionType">
+              <option value="convergent">Convergent</option>
+              <option value="divergent">Divergent</option>
+            </select>
+          </label>
+
+          <button id="resetView" type="button">Reset 3D Camera</button>
+        </div>
+      </aside>
+
+      <main class="viewer-shell">
+        <section class="panel">
+          <header>
+            <h2>Plan View</h2>
+            <p>Top-down recursive layers and axis flow.</p>
+          </header>
+          <canvas id="planCanvas"></canvas>
+        </section>
+
+        <section class="panel">
+          <header>
+            <h2>3D Muqarnas</h2>
+            <p>Convergent/divergent triangulated layered dome.</p>
+          </header>
+          <div id="threeRoot"></div>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
