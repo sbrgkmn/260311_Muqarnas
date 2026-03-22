@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -9,8 +9,8 @@
   <body>
     <div class="app-shell">
       <aside class="controls">
-        <h1>Octagonal Muqarnas Generator</h1>
-        <p class="subtitle">Haci Kilic-first recursive build with collision-aware growth. Silver-ratio units are fixed.</p>
+        <h1>Recursive Muqarnas Generator</h1>
+        <p class="subtitle">Three-axis recursive growth (orthogonal, diagonal, secondary) with 22.5 deg branch clock and collision-aware convergence.</p>
 
         <div class="control-grid">
           <label>
@@ -21,115 +21,50 @@
           <label>
             Dome Scope
             <select id="scope">
-              <option value="quadrant">Quadrant (90°)</option>
-              <option value="half">Half Dome (180°)</option>
-              <option value="full" selected>Full Dome (360°)</option>
+              <option value="quadrant">Quadrant (90 deg)</option>
+              <option value="half">Half Dome (180 deg)</option>
+              <option value="full" selected>Full Dome (360 deg)</option>
             </select>
           </label>
 
           <label>
             Layers
-            <input id="layers" type="number" min="2" max="30" step="1" />
-          </label>
-
-          <label class="inline-check">
-            <input id="freezeRecursion" type="checkbox" checked />
-            Freeze Recursion (debug)
+            <input id="layers" type="number" min="1" max="120" step="1" />
           </label>
 
           <label>
-            Preview Layer
-            <div class="inline-row">
-              <input id="previewLayer" type="range" min="0" max="30" step="1" />
-              <output id="previewLayerValue">0/0</output>
-            </div>
-          </label>
-
-          <button id="stepRecursion" type="button">Step +1 Layer</button>
-
-          <label>
-            Layer Height
-            <input id="layerHeight" type="number" min="0.05" max="3" step="0.05" />
+            Layer Height Scale
+            <input id="layerHeight" type="number" min="0" max="5" step="0.05" />
           </label>
 
           <label>
-            Initial Radius
-            <input id="initialRadius" type="number" min="0.01" max="5" step="0.01" />
+            Height Pattern
+            <input id="heightPattern" type="text" placeholder="1,1,1" />
           </label>
 
           <label>
             Global Ratio Scale
-            <input id="ratioScale" type="number" min="0.1" max="5" step="0.05" />
+            <input id="ratioScale" type="number" min="0.05" max="10" step="0.05" />
           </label>
 
           <label>
-            Orthogonal Rule I
-            <input id="ruleOrth1" type="text" />
-          </label>
-          <label>
-            Orthogonal Rule II
-            <input id="ruleOrth2" type="text" />
-          </label>
-          <label>
-            Diagonal Rule I
-            <input id="ruleDiag1" type="text" />
-          </label>
-          <label>
-            Diagonal Rule II
-            <input id="ruleDiag2" type="text" />
-          </label>
-          <label>
-            Secondary Rule I
-            <input id="ruleSecondary1" type="text" />
-          </label>
-          <label>
-            Secondary Rule II
-            <input id="ruleSecondary2" type="text" />
+            Collision Epsilon
+            <input id="collisionEpsilon" type="number" min="0.005" max="1" step="0.005" />
           </label>
 
           <label>
-            Rule II Starts at Layer
-            <input id="phaseSwitchLayer" type="number" min="0" max="30" step="1" />
+            Orthogonal Rule
+            <input id="ruleOrthogonal" type="text" />
           </label>
 
           <label>
-            Convergence Interval
-            <input id="convergenceEvery" type="number" min="0" max="12" step="1" />
+            Diagonal Rule
+            <input id="ruleDiagonal" type="text" />
           </label>
 
           <label>
-            Convergence Strength
-            <input id="convergenceStrength" type="number" min="0" max="1" step="0.05" />
-          </label>
-
-          <label>
-            Branch Clock Offset (22.5° steps)
-            <input id="branchClockOffset" type="number" min="0" max="15" step="1" />
-          </label>
-
-          <label>
-            Branching Morphology
-            <select id="branchingType">
-              <option value="star-secondary">Star / Secondary Axis</option>
-              <option value="star-main">Star / Main Axes</option>
-              <option value="polygon-secondary">Polygon / Secondary Axis</option>
-              <option value="polygon-main">Polygon / Main Axes</option>
-            </select>
-          </label>
-
-          <label>
-            Star Amplitude
-            <input id="starAmplitude" type="number" min="0" max="0.5" step="0.01" />
-          </label>
-
-          <label>
-            Polygon Smoothing
-            <input id="polygonSmoothing" type="number" min="0" max="1" step="0.05" />
-          </label>
-
-          <label>
-            Branch Boost (cycle complete)
-            <input id="branchBoost" type="number" min="0" max="2" step="0.01" />
+            Secondary Rule
+            <input id="ruleSecondary" type="text" />
           </label>
 
           <label>
@@ -140,6 +75,53 @@
             </select>
           </label>
 
+          <h3 class="group-title">Graphics</h3>
+
+          <label>
+            Tile Opacity
+            <input id="tileOpacity" type="number" min="0.05" max="1" step="0.05" />
+          </label>
+
+          <label>
+            Tile Edge Weight
+            <input id="tileEdgeWidth" type="number" min="0.2" max="6" step="0.1" />
+          </label>
+
+          <label>
+            Layer Profile Weight
+            <input id="profileWidth" type="number" min="0.2" max="8" step="0.1" />
+          </label>
+
+          <label>
+            Axis Line Weight
+            <input id="axisWidth" type="number" min="0.2" max="6" step="0.1" />
+          </label>
+
+          <label>
+            Point Marker Size
+            <input id="pointSize" type="number" min="0.4" max="10" step="0.1" />
+          </label>
+
+          <label>
+            Annotation Size
+            <input id="annotationSize" type="number" min="7" max="24" step="1" />
+          </label>
+
+          <label class="inline-check">
+            <input id="showProfiles" type="checkbox" checked />
+            <span>Show Layer Profiles</span>
+          </label>
+
+          <label class="inline-check">
+            <input id="showPointMarkers" type="checkbox" checked />
+            <span>Show Point Markers</span>
+          </label>
+
+          <label class="inline-check">
+            <input id="showAnnotations" type="checkbox" checked />
+            <span>Show Point Labels</span>
+          </label>
+
           <button id="resetView" type="button">Reset 3D Camera</button>
         </div>
       </aside>
@@ -148,7 +130,7 @@
         <section class="panel">
           <header>
             <h2>Plan View</h2>
-            <p>Top-down recursive layers and axis flow.</p>
+            <p>Recursive plan propagation and tile topology.</p>
           </header>
           <canvas id="planCanvas"></canvas>
         </section>
@@ -156,13 +138,13 @@
         <section class="panel">
           <header>
             <h2>3D Muqarnas</h2>
-            <p>Convergent/divergent triangulated layered dome.</p>
+            <p>Layered recursive surfaces with convergent/divergent tiling.</p>
           </header>
           <div id="threeRoot"></div>
         </section>
       </main>
     </div>
 
-    <script type="module" src="./src/main.js"></script>
+    <script type="module" src="./src/main.js?v=20260321q"></script>
   </body>
 </html>

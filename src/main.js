@@ -1,50 +1,77 @@
-import { generateMuqarnas } from "./engine.js";
-import { PRESETS, clonePreset, silverDelta, silverRatioUnits } from "./presets.js";
-import { renderPlan } from "./renderPlan.js";
-import { Muqarnas3DView } from "./render3d.js";
+import { generateMuqarnas } from "./engine.js?v=20260321q";
+import { PRESETS, clonePreset, silverRatioUnits } from "./presets.js?v=20260321q";
+import { renderPlan } from "./renderPlan.js?v=20260321q";
+import { Muqarnas3DView } from "./render3d.js?v=20260321q";
 
 const dom = {
   preset: document.getElementById("preset"),
   scope: document.getElementById("scope"),
   layers: document.getElementById("layers"),
-  freezeRecursion: document.getElementById("freezeRecursion"),
-  previewLayer: document.getElementById("previewLayer"),
-  previewLayerValue: document.getElementById("previewLayerValue"),
-  stepRecursion: document.getElementById("stepRecursion"),
   layerHeight: document.getElementById("layerHeight"),
-  initialRadius: document.getElementById("initialRadius"),
+  heightPattern: document.getElementById("heightPattern"),
   ratioScale: document.getElementById("ratioScale"),
-  ruleOrth1: document.getElementById("ruleOrth1"),
-  ruleOrth2: document.getElementById("ruleOrth2"),
-  ruleDiag1: document.getElementById("ruleDiag1"),
-  ruleDiag2: document.getElementById("ruleDiag2"),
-  ruleSecondary1: document.getElementById("ruleSecondary1"),
-  ruleSecondary2: document.getElementById("ruleSecondary2"),
-  phaseSwitchLayer: document.getElementById("phaseSwitchLayer"),
-  convergenceEvery: document.getElementById("convergenceEvery"),
-  convergenceStrength: document.getElementById("convergenceStrength"),
-  branchClockOffset: document.getElementById("branchClockOffset"),
-  branchingType: document.getElementById("branchingType"),
-  starAmplitude: document.getElementById("starAmplitude"),
-  polygonSmoothing: document.getElementById("polygonSmoothing"),
-  branchBoost: document.getElementById("branchBoost"),
+  collisionEpsilon: document.getElementById("collisionEpsilon"),
+  ruleOrthogonal: document.getElementById("ruleOrthogonal"),
+  ruleDiagonal: document.getElementById("ruleDiagonal"),
+  ruleSecondary: document.getElementById("ruleSecondary"),
   connectionType: document.getElementById("connectionType"),
+  tileOpacity: document.getElementById("tileOpacity"),
+  tileEdgeWidth: document.getElementById("tileEdgeWidth"),
+  profileWidth: document.getElementById("profileWidth"),
+  axisWidth: document.getElementById("axisWidth"),
+  pointSize: document.getElementById("pointSize"),
+  annotationSize: document.getElementById("annotationSize"),
+  showProfiles: document.getElementById("showProfiles"),
+  showPointMarkers: document.getElementById("showPointMarkers"),
+  showAnnotations: document.getElementById("showAnnotations"),
   resetView: document.getElementById("resetView"),
   planCanvas: document.getElementById("planCanvas"),
   threeRoot: document.getElementById("threeRoot"),
 };
 
-let activePresetName = "Haci Kilic (Kayseri)";
-let state = clonePreset(activePresetName);
+function assertDomBindings(bindings) {
+  const missing = Object.entries(bindings)
+    .filter(([, value]) => !value)
+    .map(([key]) => key);
+  if (missing.length > 0) {
+    throw new Error(`DOM binding error: missing element(s): ${missing.join(", ")}`);
+  }
+}
+
+assertDomBindings(dom);
+
+let activePresetName = "Haci Kilic";
+let state = null;
 let currentModel = null;
-let currentVisibleModel = null;
 let suppressCustomFlag = false;
+const VISUAL_CONTROL_IDS = new Set([
+  "tileOpacity",
+  "tileEdgeWidth",
+  "profileWidth",
+  "axisWidth",
+  "pointSize",
+  "annotationSize",
+  "showProfiles",
+  "showPointMarkers",
+  "showAnnotations",
+]);
+
+const DEFAULT_VISUAL = {
+  tileOpacity: 0.66,
+  tileEdgeWidth: 1.1,
+  profileWidth: 2.2,
+  axisWidth: 1,
+  pointSize: 2.4,
+  annotationSize: 10,
+  showProfiles: true,
+  showPointMarkers: true,
+  showAnnotations: true,
+};
 
 const threeView = new Muqarnas3DView(dom.threeRoot);
 
 function fillPresetOptions() {
-  const names = Object.keys(PRESETS);
-  for (const name of names) {
+  for (const name of Object.keys(PRESETS)) {
     const option = document.createElement("option");
     option.value = name;
     option.textContent = name;
@@ -53,123 +80,119 @@ function fillPresetOptions() {
   dom.preset.value = activePresetName;
 }
 
-function toFixedNum(value) {
-  return Number(value).toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
+function readNumber(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
-function syncPreviewControls(totalLayers, previewLayer, freezeRecursion) {
-  const clamped = clamp(Math.round(previewLayer), 0, totalLayers);
-  dom.previewLayer.max = String(totalLayers);
-  dom.previewLayer.value = String(clamped);
-  dom.previewLayerValue.textContent = `${clamped}/${totalLayers}`;
-  dom.previewLayer.disabled = !freezeRecursion;
-  dom.stepRecursion.disabled = !freezeRecursion;
+function normalizePreset(rawState) {
+  const source = rawState ?? {};
+  const rules = source.rules ?? {};
+  return {
+    scope: source.scope ?? "full",
+    layers: readNumber(source.layers, 12),
+    layerHeight: readNumber(source.layerHeight, 1),
+    heightPattern: typeof source.heightPattern === "string" ? source.heightPattern : "1,1,1",
+    ratioScale: readNumber(source.ratioScale, 1),
+    collisionEpsilon: readNumber(source.collisionEpsilon, 0.05),
+    ratios: silverRatioUnits(1),
+    rules: {
+      orthogonal: rules.orthogonal ?? rules.orth1 ?? "b,c,b,0",
+      diagonal: rules.diagonal ?? rules.diag1 ?? "b,c",
+      secondary: rules.secondary ?? rules.secondary1 ?? "a,a,d",
+    },
+    connectionType: source.connectionType === "divergent" ? "divergent" : "convergent",
+  };
 }
 
 function applyStateToControls(nextState) {
+  const safe = normalizePreset(nextState);
   suppressCustomFlag = true;
 
-  dom.scope.value = nextState.scope;
-  dom.layers.value = nextState.layers;
-  dom.freezeRecursion.checked = nextState.freezeRecursion ?? true;
-  dom.layerHeight.value = nextState.layerHeight;
-  dom.initialRadius.value = nextState.initialRadius;
-  dom.ratioScale.value = nextState.ratioScale;
-
-  dom.ruleOrth1.value = nextState.rules.orth1;
-  dom.ruleOrth2.value = nextState.rules.orth2;
-  dom.ruleDiag1.value = nextState.rules.diag1;
-  dom.ruleDiag2.value = nextState.rules.diag2;
-  dom.ruleSecondary1.value = nextState.rules.secondary1;
-  dom.ruleSecondary2.value = nextState.rules.secondary2;
-
-  dom.phaseSwitchLayer.value = nextState.phaseSwitchLayer;
-  dom.convergenceEvery.value = nextState.convergenceEvery;
-  dom.convergenceStrength.value = nextState.convergenceStrength;
-  dom.branchClockOffset.value = nextState.branchClockOffset;
-  dom.branchingType.value = nextState.branchingType;
-  dom.starAmplitude.value = nextState.starAmplitude;
-  dom.polygonSmoothing.value = nextState.polygonSmoothing;
-  dom.branchBoost.value = nextState.branchBoost;
-  dom.connectionType.value = nextState.connectionType;
-  syncPreviewControls(nextState.layers, nextState.previewLayer ?? nextState.layers, dom.freezeRecursion.checked);
-
-  const delta = silverDelta();
-  dom.resetView.textContent = `Reset 3D Camera (dS=${toFixedNum(delta)})`;
+  dom.scope.value = safe.scope;
+  dom.layers.value = String(safe.layers);
+  dom.layerHeight.value = String(safe.layerHeight);
+  dom.heightPattern.value = safe.heightPattern;
+  dom.ratioScale.value = String(safe.ratioScale);
+  dom.collisionEpsilon.value = String(safe.collisionEpsilon);
+  dom.ruleOrthogonal.value = safe.rules.orthogonal;
+  dom.ruleDiagonal.value = safe.rules.diagonal;
+  dom.ruleSecondary.value = safe.rules.secondary;
+  dom.connectionType.value = safe.connectionType;
 
   suppressCustomFlag = false;
 }
 
-function readNumber(value, fallback) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
 function collectStateFromControls() {
-  const layers = readNumber(dom.layers.value, 12);
-  const freezeRecursion = dom.freezeRecursion.checked;
-  const previewLayer = clamp(readNumber(dom.previewLayer.value, layers), 0, layers);
-  syncPreviewControls(layers, previewLayer, freezeRecursion);
-
-  const ratios = silverRatioUnits(1);
-
   return {
     scope: dom.scope.value,
-    layers,
-    freezeRecursion,
-    previewLayer,
-    layerHeight: readNumber(dom.layerHeight.value, 0.6),
-    initialRadius: readNumber(dom.initialRadius.value, 0.18),
+    layers: readNumber(dom.layers.value, 12),
+    layerHeight: readNumber(dom.layerHeight.value, 1),
+    heightPattern: dom.heightPattern.value,
     ratioScale: readNumber(dom.ratioScale.value, 1),
-    lockSilverRatios: true,
-    ratios,
+    collisionEpsilon: readNumber(dom.collisionEpsilon.value, 0.05),
+    ratios: silverRatioUnits(1),
     rules: {
-      orth1: dom.ruleOrth1.value,
-      orth2: dom.ruleOrth2.value,
-      diag1: dom.ruleDiag1.value,
-      diag2: dom.ruleDiag2.value,
-      secondary1: dom.ruleSecondary1.value,
-      secondary2: dom.ruleSecondary2.value,
+      orthogonal: dom.ruleOrthogonal.value,
+      diagonal: dom.ruleDiagonal.value,
+      secondary: dom.ruleSecondary.value,
     },
-    phaseSwitchLayer: readNumber(dom.phaseSwitchLayer.value, 0),
-    convergenceEvery: readNumber(dom.convergenceEvery.value, 3),
-    convergenceStrength: readNumber(dom.convergenceStrength.value, 0.7),
-    branchClockOffset: readNumber(dom.branchClockOffset.value, 0),
-    branchingType: dom.branchingType.value,
-    starAmplitude: readNumber(dom.starAmplitude.value, 0.1),
-    polygonSmoothing: readNumber(dom.polygonSmoothing.value, 0.35),
-    branchBoost: readNumber(dom.branchBoost.value, 0.1),
     connectionType: dom.connectionType.value,
   };
 }
 
-function buildVisibleModel(model, nextState) {
-  if (!model || !model.layers?.length) {
-    return model;
-  }
-
-  const visibleLayerCount = nextState.freezeRecursion ? clamp(nextState.previewLayer, 0, nextState.layers) : nextState.layers;
-  const visibleTileLayers = Array.isArray(model.tileLayers) ? model.tileLayers.slice(0, visibleLayerCount + 1) : undefined;
-
+function normalizeVisual(rawVisual) {
+  const source = rawVisual ?? {};
   return {
-    ...model,
-    layers: model.layers.slice(0, visibleLayerCount + 1),
-    tileLayers: visibleTileLayers,
-    visibleLayerCount,
+    tileOpacity: clamp(readNumber(source.tileOpacity, DEFAULT_VISUAL.tileOpacity), 0.05, 1),
+    tileEdgeWidth: clamp(readNumber(source.tileEdgeWidth, DEFAULT_VISUAL.tileEdgeWidth), 0.2, 6),
+    profileWidth: clamp(readNumber(source.profileWidth, DEFAULT_VISUAL.profileWidth), 0.2, 8),
+    axisWidth: clamp(readNumber(source.axisWidth, DEFAULT_VISUAL.axisWidth), 0.2, 6),
+    pointSize: clamp(readNumber(source.pointSize, DEFAULT_VISUAL.pointSize), 0.4, 10),
+    annotationSize: clamp(readNumber(source.annotationSize, DEFAULT_VISUAL.annotationSize), 7, 24),
+    showProfiles: source.showProfiles !== false,
+    showPointMarkers: source.showPointMarkers !== false,
+    showAnnotations: source.showAnnotations !== false,
   };
 }
 
-function refresh(autoFrame = false) {
-  state = collectStateFromControls();
+function applyVisualToControls(rawVisual) {
+  const visual = normalizeVisual(rawVisual);
+  dom.tileOpacity.value = String(visual.tileOpacity);
+  dom.tileEdgeWidth.value = String(visual.tileEdgeWidth);
+  dom.profileWidth.value = String(visual.profileWidth);
+  dom.axisWidth.value = String(visual.axisWidth);
+  dom.pointSize.value = String(visual.pointSize);
+  dom.annotationSize.value = String(visual.annotationSize);
+  dom.showProfiles.checked = visual.showProfiles;
+  dom.showPointMarkers.checked = visual.showPointMarkers;
+  dom.showAnnotations.checked = visual.showAnnotations;
+}
 
+function collectVisualFromControls() {
+  return normalizeVisual({
+    tileOpacity: dom.tileOpacity.value,
+    tileEdgeWidth: dom.tileEdgeWidth.value,
+    profileWidth: dom.profileWidth.value,
+    axisWidth: dom.axisWidth.value,
+    pointSize: dom.pointSize.value,
+    annotationSize: dom.annotationSize.value,
+    showProfiles: dom.showProfiles.checked,
+    showPointMarkers: dom.showPointMarkers.checked,
+    showAnnotations: dom.showAnnotations.checked,
+  });
+}
+
+function refresh(autoFrame = false) {
+  state = normalizePreset(collectStateFromControls());
+  const visual = collectVisualFromControls();
   currentModel = generateMuqarnas(state);
-  currentVisibleModel = buildVisibleModel(currentModel, state);
-  renderPlan(dom.planCanvas, currentVisibleModel, state.scope);
-  threeView.setModel(currentVisibleModel, state.scope, state.connectionType, autoFrame);
+  renderPlan(dom.planCanvas, currentModel, state.scope, visual);
+  threeView.setModel(currentModel, state.scope, state.connectionType, autoFrame, visual);
 }
 
 function markCustom() {
@@ -183,43 +206,34 @@ function markCustom() {
 }
 
 fillPresetOptions();
+state = normalizePreset(clonePreset(activePresetName));
 applyStateToControls(state);
+applyVisualToControls(DEFAULT_VISUAL);
 refresh(true);
 
-const allInputs = document.querySelectorAll("input, select");
-const debugOnlyControls = new Set(["freezeRecursion", "previewLayer"]);
-for (const input of allInputs) {
-  if (input.id === "preset") {
+const controls = document.querySelectorAll("input, select");
+for (const control of controls) {
+  if (control.id === "preset") {
     continue;
   }
-
-  input.addEventListener("input", () => {
-    if (!debugOnlyControls.has(input.id)) {
+  control.addEventListener("input", () => {
+    if (!VISUAL_CONTROL_IDS.has(control.id)) {
       markCustom();
     }
     refresh(false);
   });
-
-  input.addEventListener("change", () => {
-    if (!debugOnlyControls.has(input.id)) {
+  control.addEventListener("change", () => {
+    if (!VISUAL_CONTROL_IDS.has(control.id)) {
       markCustom();
     }
     refresh(false);
   });
 }
 
-dom.stepRecursion.addEventListener("click", () => {
-  const maxLayer = readNumber(dom.previewLayer.max, readNumber(dom.layers.value, 12));
-  const current = readNumber(dom.previewLayer.value, 0);
-  dom.freezeRecursion.checked = true;
-  dom.previewLayer.value = String((current + 1) % (maxLayer + 1));
-  refresh(false);
-});
-
 dom.preset.addEventListener("change", (event) => {
   const name = event.target.value;
   activePresetName = name;
-  const preset = clonePreset(name);
+  const preset = normalizePreset(clonePreset(name));
   applyStateToControls(preset);
   refresh(true);
 });
@@ -232,8 +246,8 @@ dom.resetView.addEventListener("click", () => {
 });
 
 window.addEventListener("resize", () => {
-  if (!currentVisibleModel) {
+  if (!currentModel) {
     return;
   }
-  renderPlan(dom.planCanvas, currentVisibleModel, state.scope);
+  renderPlan(dom.planCanvas, currentModel, state.scope, collectVisualFromControls());
 });

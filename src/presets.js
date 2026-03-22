@@ -8,6 +8,7 @@ export function silverRatioUnits(a = 1) {
     b: Math.sqrt(2 - sqrt2) * a,
     c: Math.sqrt(4 - 2 * sqrt2) * a,
     d: (sqrt2 - 1) * a,
+    x: (1 + (sqrt2 - 1)) * a,
     e: sqrt2 * a,
     f: (1 - sqrt2 / 2) * a,
     g: (sqrt2 / 2) * a,
@@ -22,65 +23,68 @@ function basePreset() {
   return {
     scope: "full",
     layers: 12,
-    layerHeight: 0.65,
-    initialRadius: 0.18,
+    layerHeight: 1,
+    heightPattern: "1,1,1",
     ratioScale: 1,
-    lockSilverRatios: true,
     ratios: silverRatioUnits(1),
     rules: {
-      orth1: "b,c,b,v",
-      orth2: "",
-      diag1: "b,c",
-      diag2: "",
-      secondary1: "a,a,d",
-      secondary2: "",
+      orthogonal: "b,c,b,0",
+      diagonal: "b,c",
+      secondary: "a,a,d",
     },
-    phaseSwitchLayer: 0,
-    convergenceEvery: 3,
-    convergenceStrength: 0.65,
-    branchClockOffset: 0,
-    branchingType: "star-main",
-    starAmplitude: 0.1,
-    polygonSmoothing: 0.35,
-    branchBoost: 0.12,
+    collisionEpsilon: 0.05,
     connectionType: "convergent",
   };
 }
 
 export const PRESETS = {
-  "Haci Kilic (Kayseri)": {
+  "Haci Kilic": {
     ...basePreset(),
-    layers: 14,
     rules: {
-      orth1: "b,c,b,v",
-      orth2: "c,b,b,v",
-      diag1: "b,c",
-      diag2: "c,b",
-      secondary1: "a,a,d",
-      secondary2: "a,a,d",
+      orthogonal: "b,c,b,0",
+      diagonal: "b,c",
+      secondary: "a,a,d",
     },
-    phaseSwitchLayer: 7,
-    convergenceEvery: 2,
-    convergenceStrength: 0.7,
-    branchingType: "star-main",
+    connectionType: "convergent",
+  },
+
+  "Cifte Minaret": {
+    ...basePreset(),
+    rules: {
+      orthogonal: "a,a,0,0,d,a",
+      diagonal: "a,a,d",
+      secondary: "b,c,0,0",
+    },
+    connectionType: "convergent",
+  },
+
+  "Sifaiye": {
+    ...basePreset(),
+    rules: {
+      orthogonal: "c,b,b,0",
+      diagonal: "c,b",
+      secondary: "a,x,0",
+    },
+    connectionType: "divergent",
+  },
+
+  "Gevher Nesibe": {
+    ...basePreset(),
+    rules: {
+      orthogonal: "a,x,0,0,a,0",
+      diagonal: "a,x,a",
+      secondary: "b,c,b,0",
+    },
     connectionType: "convergent",
   },
 
   "Custom": {
     ...basePreset(),
-    layers: 14,
     rules: {
-      orth1: "b,c,b,v",
-      orth2: "c,b,b,v",
-      diag1: "b,c",
-      diag2: "c,b",
-      secondary1: "a,a,d",
-      secondary2: "a,a,d",
+      orthogonal: "b,c,b,0",
+      diagonal: "b,c",
+      secondary: "a,a,d",
     },
-    phaseSwitchLayer: 7,
-    convergenceEvery: 2,
-    convergenceStrength: 0.7,
-    branchingType: "star-main",
     connectionType: "convergent",
   },
 };

@@ -1,5 +1,44 @@
-import { getScopeRange } from "./engine.js";
-import { hexToRgb, rgbToStyle, shadeRgb, tileTriangleColors, triangleColor } from "./tileColors.js";
+import { getScopeRange } from "./engine.js?v=20260321q";
+import { hexToRgb, rgbToStyle, shadeRgb, tileTriangleColors, triangleColor } from "./tileColors.js?v=20260321q";
+
+const TRI_TYPE_COLORS = {
+  convergent: { r: 189, g: 84, b: 80 },
+  divergent: { r: 77, g: 136, b: 201 },
+  vertical: { r: 55, g: 152, b: 112 },
+  fan: { r: 142, g: 110, b: 192 },
+  generic: { r: 158, g: 149, b: 136 },
+};
+
+const DEFAULT_VISUAL = {
+  tileOpacity: 0.66,
+  tileEdgeWidth: 1.1,
+  profileWidth: 2.2,
+  axisWidth: 1,
+  pointSize: 2.4,
+  annotationSize: 10,
+  showProfiles: true,
+  showPointMarkers: true,
+  showAnnotations: true,
+};
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function normalizeVisual(rawVisual) {
+  const source = rawVisual ?? {};
+  return {
+    tileOpacity: clamp(Number(source.tileOpacity) || DEFAULT_VISUAL.tileOpacity, 0.05, 1),
+    tileEdgeWidth: clamp(Number(source.tileEdgeWidth) || DEFAULT_VISUAL.tileEdgeWidth, 0.2, 6),
+    profileWidth: clamp(Number(source.profileWidth) || DEFAULT_VISUAL.profileWidth, 0.2, 8),
+    axisWidth: clamp(Number(source.axisWidth) || DEFAULT_VISUAL.axisWidth, 0.2, 6),
+    pointSize: clamp(Number(source.pointSize) || DEFAULT_VISUAL.pointSize, 0.4, 10),
+    annotationSize: clamp(Number(source.annotationSize) || DEFAULT_VISUAL.annotationSize, 7, 24),
+    showProfiles: source.showProfiles !== false,
+    showPointMarkers: source.showPointMarkers !== false,
+    showAnnotations: source.showAnnotations !== false,
+  };
+}
 
 function resizeCanvas(canvas) {
   const dpr = window.devicePixelRatio || 1;
@@ -38,19 +77,35 @@ function inScope(point, scope) {
   if (scope === "full") {
     return true;
   }
+  const eps = 1e-6;
+  if (scope === "quadrant") {
+    return point.x >= -eps && point.y >= -eps;
+  }
+  if (scope === "half") {
+    return point.y >= -eps;
+  }
   const angle = normalizeAngle(Math.atan2(point.y, point.x));
-  return angle <= scopeMaxAngle(scope) + 1e-6;
+  return angle <= scopeMaxAngle(scope) + eps;
 }
 
 function tileInScope(tile, scope) {
   if (scope === "full") {
     return true;
   }
-  const center = {
-    x: (tile.a.x + tile.b.x + tile.c.x) / 3,
-    y: (tile.a.y + tile.b.y + tile.c.y) / 3,
-  };
-  return inScope(center, scope);
+  return inScope(tile.a, scope) && inScope(tile.b, scope) && inScope(tile.c, scope);
+}
+
+function sortPointsByAngle(points) {
+  return [...points].sort((a, b) => {
+    const aa = Math.atan2(a.y, a.x);
+    const bb = Math.atan2(b.y, b.x);
+    if (aa !== bb) {
+      return aa - bb;
+    }
+    const ra = Math.hypot(a.x, a.y);
+    const rb = Math.hypot(b.x, b.y);
+    return ra - rb;
+  });
 }
 
 function getBoundsFromTiles(tileLayers, scope) {
@@ -127,7 +182,7 @@ function drawTriangle(ctx, a, b, c, fillStyle, strokeStyle, width = 0.85) {
   ctx.stroke();
 }
 
-function drawTiledPlan(ctx, model, scope, toCanvas, center, totalLayers) {
+function drawTiledPlan(ctx, model, scope, toCanvas, center, totalLayers, visual) {
   const tileLayers = model.tileLayers ?? [];
   const maxTileLayer = Math.max(1, tileLayers.length - 1);
 
@@ -137,7 +192,7 @@ function drawTiledPlan(ctx, model, scope, toCanvas, center, totalLayers) {
     }
 
     const depth = tileLayer.layer / maxTileLayer;
-    const alpha = 0.22 + 0.58 * depth;
+    const alpha = clamp((0.22 + 0.58 * depth) * visual.tileOpacity, 0.08, 1);
     const shade = 0.68 + 0.32 * depth;
 
     for (const tile of tileLayer.triangles) {
@@ -148,11 +203,11 @@ function drawTiledPlan(ctx, model, scope, toCanvas, center, totalLayers) {
       const a = toCanvas(tile.a);
       const b = toCanvas(tile.b);
       const c = toCanvas(tile.c);
-      const base = triangleColor(model.axisColors, tile.a, tile.b, tile.c);
+      const base = TRI_TYPE_COLORS[tile.kind] ?? triangleColor(model.axisColors, tile.a, tile.b, tile.c);
       const fill = rgbToStyle(shadeRgb(base, shade), alpha);
-      const edge = rgbToStyle(shadeRgb(base, 0.42), 0.5);
+      const edge = rgbToStyle(shadeRgb(base, 0.45), 0.78);
 
-      drawTriangle(ctx, a, b, c, fill, edge, 0.9);
+      drawTriangle(ctx, a, b, c, fill, edge, visual.tileEdgeWidth);
     }
   }
 
@@ -167,12 +222,12 @@ function drawTiledPlan(ctx, model, scope, toCanvas, center, totalLayers) {
     ctx.moveTo(center.x, center.y);
     ctx.lineTo(p.x, p.y);
     ctx.strokeStyle = rgbToStyle(color, 0.32);
-    ctx.lineWidth = 1;
+    ctx.lineWidth = visual.axisWidth;
     ctx.stroke();
   }
 }
 
-function drawLegacyPlan(ctx, model, scope, toCanvas, center, totalLayers) {
+function drawLegacyPlan(ctx, model, scope, toCanvas, center, totalLayers, visual) {
   const { closed } = getScopeRange(scope);
   const indices = buildVisibleIndices(scope);
   const connectionType = model.params?.connectionType === "divergent" ? "divergent" : "convergent";
@@ -181,7 +236,7 @@ function drawLegacyPlan(ctx, model, scope, toCanvas, center, totalLayers) {
     const upper = model.layers[layerIndex - 1].points;
     const lower = model.layers[layerIndex].points;
     const depth = layerIndex / totalLayers;
-    const alpha = 0.18 + 0.52 * depth;
+    const alpha = clamp((0.18 + 0.52 * depth) * visual.tileOpacity, 0.08, 1);
     const shade = 0.72 + 0.28 * depth;
     const edgeAlpha = 0.14 + 0.26 * depth;
     const edge = rgbToStyle({ r: 58, g: 50, b: 43 }, edgeAlpha);
@@ -206,11 +261,11 @@ function drawLegacyPlan(ctx, model, scope, toCanvas, center, totalLayers) {
       const triBStyle = rgbToStyle(shadeRgb(triB, shade), alpha);
 
       if (connectionType === "divergent") {
-        drawTriangle(ctx, a, c, b, triAStyle, edge);
-        drawTriangle(ctx, b, c, d, triBStyle, edge);
+        drawTriangle(ctx, a, c, b, triAStyle, edge, visual.tileEdgeWidth);
+        drawTriangle(ctx, b, c, d, triBStyle, edge, visual.tileEdgeWidth);
       } else {
-        drawTriangle(ctx, a, c, d, triAStyle, edge);
-        drawTriangle(ctx, a, d, b, triBStyle, edge);
+        drawTriangle(ctx, a, c, d, triAStyle, edge, visual.tileEdgeWidth);
+        drawTriangle(ctx, a, d, b, triBStyle, edge, visual.tileEdgeWidth);
       }
     }
   }
@@ -224,12 +279,87 @@ function drawLegacyPlan(ctx, model, scope, toCanvas, center, totalLayers) {
     ctx.moveTo(center.x, center.y);
     ctx.lineTo(p.x, p.y);
     ctx.strokeStyle = rgbToStyle(color, 0.38);
-    ctx.lineWidth = 1;
+    ctx.lineWidth = visual.axisWidth;
     ctx.stroke();
   }
 }
 
-export function renderPlan(canvas, model, scope) {
+function drawLayerProfiles(ctx, model, scope, toCanvas, visual) {
+  if (!visual.showProfiles) {
+    return;
+  }
+
+  const layers = model.layers ?? [];
+  if (layers.length <= 1) {
+    return;
+  }
+
+  for (let layerIndex = 1; layerIndex < layers.length; layerIndex += 1) {
+    const depth = layerIndex / Math.max(1, layers.length - 1);
+    const ordered = sortPointsByAngle(layers[layerIndex].points.filter((p) => inScope(p, scope)));
+    if (ordered.length < 2) {
+      continue;
+    }
+
+    const { closed } = getScopeRange(scope);
+    ctx.beginPath();
+    const first = toCanvas(ordered[0]);
+    ctx.moveTo(first.x, first.y);
+    for (let i = 1; i < ordered.length; i += 1) {
+      const p = toCanvas(ordered[i]);
+      ctx.lineTo(p.x, p.y);
+    }
+    if (closed && ordered.length > 2) {
+      ctx.closePath();
+    }
+
+    ctx.strokeStyle = rgbToStyle({ r: 38, g: 33, b: 27 }, 0.18 + depth * 0.34);
+    ctx.lineWidth = visual.profileWidth * (0.78 + depth * 0.55);
+    ctx.stroke();
+  }
+}
+
+function drawPointAnnotations(ctx, model, scope, toCanvas, visual) {
+  if (!visual.showPointMarkers && !visual.showAnnotations) {
+    return;
+  }
+
+  const layers = model.layers ?? [];
+  if (layers.length <= 1) {
+    return;
+  }
+
+  const topLayer = layers.length - 1;
+  const labelStart = Math.max(1, topLayer - 1);
+
+  for (let li = 1; li < layers.length; li += 1) {
+    const points = sortPointsByAngle(layers[li].points.filter((p) => inScope(p, scope)));
+    const depth = li / Math.max(1, topLayer);
+    const markerAlpha = li >= labelStart ? 0.92 : 0.4;
+
+    for (let i = 0; i < points.length; i += 1) {
+      const point = points[i];
+      const p = toCanvas(point);
+      const color = point.pp ? { r: 30, g: 120, b: 96 } : hexToRgb("#2f2a25");
+
+      if (visual.showPointMarkers) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, visual.pointSize * (0.72 + depth * 0.35), 0, Math.PI * 2);
+        ctx.fillStyle = rgbToStyle(color, markerAlpha);
+        ctx.fill();
+      }
+
+      if (visual.showAnnotations && li >= labelStart) {
+        ctx.fillStyle = rgbToStyle({ r: 20, g: 20, b: 20 }, 0.88);
+        ctx.font = `${visual.annotationSize}px "IBM Plex Sans", sans-serif`;
+        ctx.fillText(`${li}:${i}`, p.x + 4, p.y - 4);
+      }
+    }
+  }
+}
+
+export function renderPlan(canvas, model, scope, rawVisual = {}) {
+  const visual = normalizeVisual(rawVisual);
   const ctx = canvas.getContext("2d");
   const { width, height, dpr } = resizeCanvas(canvas);
   const cssWidth = width / dpr;
@@ -276,10 +406,12 @@ export function renderPlan(canvas, model, scope) {
   }
 
   if (hasTiles) {
-    drawTiledPlan(ctx, model, scope, toCanvas, center, totalLayers);
+    drawTiledPlan(ctx, model, scope, toCanvas, center, totalLayers, visual);
   } else {
-    drawLegacyPlan(ctx, model, scope, toCanvas, center, totalLayers);
+    drawLegacyPlan(ctx, model, scope, toCanvas, center, totalLayers, visual);
   }
+  drawLayerProfiles(ctx, model, scope, toCanvas, visual);
+  drawPointAnnotations(ctx, model, scope, toCanvas, visual);
 
   ctx.fillStyle = "#5f6a6b";
   ctx.font = '12px "IBM Plex Sans", sans-serif';
