@@ -1,7 +1,7 @@
 import * as THREE from "https://esm.sh/three@0.164.1";
 import { OrbitControls } from "https://esm.sh/three@0.164.1/examples/jsm/controls/OrbitControls.js";
-import { getScopeRange } from "./engine.js?v=20260321q";
-import { rgbToUnit, shadeRgb, tileTriangleColors, triangleColor } from "./tileColors.js?v=20260321q";
+import { getScopeRange } from "./engine.js?v=20260324f";
+import { rgbToUnit, shadeRgb, tileTriangleColors, triangleColor } from "./tileColors.js?v=20260324f";
 
 const TRI_TYPE_COLORS = {
   convergent: { r: 189, g: 84, b: 80 },
@@ -17,6 +17,7 @@ const DEFAULT_VISUAL = {
   profileWidth: 2.2,
   axisWidth: 1,
   pointSize: 2.4,
+  showTriangles: false,
   showProfiles: true,
   showPointMarkers: true,
 };
@@ -33,6 +34,7 @@ function normalizeVisual(rawVisual) {
     profileWidth: clamp(Number(source.profileWidth) || DEFAULT_VISUAL.profileWidth, 0.2, 8),
     axisWidth: clamp(Number(source.axisWidth) || DEFAULT_VISUAL.axisWidth, 0.2, 6),
     pointSize: clamp(Number(source.pointSize) || DEFAULT_VISUAL.pointSize, 0.4, 10),
+    showTriangles: source.showTriangles !== false,
     showProfiles: source.showProfiles !== false,
     showPointMarkers: source.showPointMarkers !== false,
   };
@@ -115,6 +117,37 @@ function segmentInScope(segment, scope) {
   }
   const angle = normalizeAngle(Math.atan2(centerY, centerX));
   return angle <= scopeMaxAngle(scope) + eps;
+}
+
+function segmentDisplayAxis(segment) {
+  if (!segment || !segment.a || !segment.b) {
+    return segment?.axis ?? "orthogonal";
+  }
+  if (segment.axis === "secondary") {
+    return "secondary";
+  }
+
+  const dx = segment.a.x - segment.b.x;
+  const dy = segment.a.y - segment.b.y;
+  if (Math.hypot(dx, dy) < 1e-8) {
+    return segment.axis;
+  }
+
+  let angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+  if (angle < 0) {
+    angle += 360;
+  }
+  const rel90 = Math.min(
+    Math.abs(angle - 0),
+    Math.abs(angle - 90),
+    Math.abs(angle - 180),
+    Math.abs(angle - 270),
+    Math.abs(angle - 360),
+  );
+  if (rel90 <= 6) {
+    return "orthogonal";
+  }
+  return segment.axis;
 }
 
 function pushTriangle(store, a, b, c, color) {
@@ -306,7 +339,8 @@ export class Muqarnas3DView {
         }
         const points = [vector(segment.a), vector(segment.b)];
         const geometry = new THREE.BufferGeometry().setFromPoints(points);
-        const color = model.axisColors[segment.axis] ?? "#5e5447";
+        const displayAxis = segmentDisplayAxis(segment);
+        const color = model.axisColors[displayAxis] ?? "#5e5447";
         const material = new THREE.LineBasicMaterial({
           color,
           opacity: 0.38,
@@ -443,8 +477,11 @@ export class Muqarnas3DView {
 
     const connection = connectionType === "divergent" ? "divergent" : "convergent";
 
-    const mesh = this.buildMesh(model, scope, connection, visual);
-    this.group.add(mesh);
+    let mesh = null;
+    if (visual.showTriangles) {
+      mesh = this.buildMesh(model, scope, connection, visual);
+      this.group.add(mesh);
+    }
 
     const axes = this.buildAxisLines(model, scope, visual);
     this.group.add(axes);
@@ -455,17 +492,19 @@ export class Muqarnas3DView {
     const markers = this.buildPointMarkers(model, scope, visual);
     this.group.add(markers);
 
-    const wireframe = new THREE.WireframeGeometry(mesh.geometry);
-    const wire = new THREE.LineSegments(
-      wireframe,
-      new THREE.LineBasicMaterial({
-        color: "#2f2a25",
-        opacity: clamp(0.08 + visual.tileEdgeWidth * 0.06, 0.08, 0.55),
-        transparent: true,
-        linewidth: visual.tileEdgeWidth,
-      }),
-    );
-    this.group.add(wire);
+    if (mesh?.geometry) {
+      const wireframe = new THREE.WireframeGeometry(mesh.geometry);
+      const wire = new THREE.LineSegments(
+        wireframe,
+        new THREE.LineBasicMaterial({
+          color: "#2f2a25",
+          opacity: clamp(0.08 + visual.tileEdgeWidth * 0.06, 0.08, 0.55),
+          transparent: true,
+          linewidth: visual.tileEdgeWidth,
+        }),
+      );
+      this.group.add(wire);
+    }
 
     if (autoFrame) {
       this.fitView();

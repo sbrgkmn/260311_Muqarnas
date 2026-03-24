@@ -1,13 +1,5 @@
-import { getScopeRange } from "./engine.js?v=20260321q";
-import { hexToRgb, rgbToStyle, shadeRgb, tileTriangleColors, triangleColor } from "./tileColors.js?v=20260321q";
-
-const TRI_TYPE_COLORS = {
-  convergent: { r: 189, g: 84, b: 80 },
-  divergent: { r: 77, g: 136, b: 201 },
-  vertical: { r: 55, g: 152, b: 112 },
-  fan: { r: 142, g: 110, b: 192 },
-  generic: { r: 158, g: 149, b: 136 },
-};
+import { getScopeRange } from "./engine.js?v=20260324f";
+import { hexToRgb, rgbToStyle, shadeRgb, tileTriangleColors, triangleShapeColor } from "./tileColors.js?v=20260324f";
 
 const DEFAULT_VISUAL = {
   tileOpacity: 0.66,
@@ -16,9 +8,12 @@ const DEFAULT_VISUAL = {
   axisWidth: 1,
   pointSize: 2.4,
   annotationSize: 10,
+  showTriangles: false,
   showProfiles: true,
   showPointMarkers: true,
-  showAnnotations: true,
+  showAnnotations: false,
+  showGrowthArrows: true,
+  showGrowthValues: false,
 };
 
 function clamp(value, min, max) {
@@ -34,9 +29,12 @@ function normalizeVisual(rawVisual) {
     axisWidth: clamp(Number(source.axisWidth) || DEFAULT_VISUAL.axisWidth, 0.2, 6),
     pointSize: clamp(Number(source.pointSize) || DEFAULT_VISUAL.pointSize, 0.4, 10),
     annotationSize: clamp(Number(source.annotationSize) || DEFAULT_VISUAL.annotationSize, 7, 24),
+    showTriangles: source.showTriangles !== false,
     showProfiles: source.showProfiles !== false,
     showPointMarkers: source.showPointMarkers !== false,
     showAnnotations: source.showAnnotations !== false,
+    showGrowthArrows: source.showGrowthArrows !== false,
+    showGrowthValues: source.showGrowthValues !== false,
   };
 }
 
@@ -93,6 +91,77 @@ function tileInScope(tile, scope) {
     return true;
   }
   return inScope(tile.a, scope) && inScope(tile.b, scope) && inScope(tile.c, scope);
+}
+
+function segmentInScope(segment, scope) {
+  if (scope === "full") {
+    return true;
+  }
+  const eps = 1e-6;
+  const centerX = (segment.a.x + segment.b.x) * 0.5;
+  const centerY = (segment.a.y + segment.b.y) * 0.5;
+  if (scope === "quadrant") {
+    return centerX >= -eps && centerY >= -eps;
+  }
+  if (scope === "half") {
+    return centerY >= -eps;
+  }
+  const angle = normalizeAngle(Math.atan2(centerY, centerX));
+  return angle <= scopeMaxAngle(scope) + eps;
+}
+
+function segmentDisplayAxis(segment) {
+  if (!segment || !segment.a || !segment.b) {
+    return segment?.axis ?? "orthogonal";
+  }
+  if (segment.axis === "secondary") {
+    return "secondary";
+  }
+
+  const dx = segment.a.x - segment.b.x;
+  const dy = segment.a.y - segment.b.y;
+  if (Math.hypot(dx, dy) < 1e-8) {
+    return segment.axis;
+  }
+
+  let angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+  if (angle < 0) {
+    angle += 360;
+  }
+  const rel90 = Math.min(
+    Math.abs(angle - 0),
+    Math.abs(angle - 90),
+    Math.abs(angle - 180),
+    Math.abs(angle - 270),
+    Math.abs(angle - 360),
+  );
+  if (rel90 <= 6) {
+    return "orthogonal";
+  }
+  return segment.axis;
+}
+
+function drawAxisSegments(ctx, model, scope, toCanvas, visual, alpha = 0.32) {
+  if (!Array.isArray(model.axisSegments) || model.axisSegments.length === 0) {
+    return false;
+  }
+
+  for (const segment of model.axisSegments) {
+    if (!segmentInScope(segment, scope)) {
+      continue;
+    }
+    const a = toCanvas(segment.a);
+    const b = toCanvas(segment.b);
+    const displayAxis = segmentDisplayAxis(segment);
+    const color = shadeRgb(hexToRgb(model.axisColors[displayAxis]), 0.95);
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.strokeStyle = rgbToStyle(color, alpha);
+    ctx.lineWidth = visual.axisWidth;
+    ctx.stroke();
+  }
+  return true;
 }
 
 function sortPointsByAngle(points) {
@@ -184,16 +253,12 @@ function drawTriangle(ctx, a, b, c, fillStyle, strokeStyle, width = 0.85) {
 
 function drawTiledPlan(ctx, model, scope, toCanvas, center, totalLayers, visual) {
   const tileLayers = model.tileLayers ?? [];
-  const maxTileLayer = Math.max(1, tileLayers.length - 1);
+  const alpha = clamp(visual.tileOpacity * 0.9, 0.08, 1);
 
   for (const tileLayer of tileLayers) {
     if (tileLayer.layer <= 0) {
       continue;
     }
-
-    const depth = tileLayer.layer / maxTileLayer;
-    const alpha = clamp((0.22 + 0.58 * depth) * visual.tileOpacity, 0.08, 1);
-    const shade = 0.68 + 0.32 * depth;
 
     for (const tile of tileLayer.triangles) {
       if (!tileInScope(tile, scope)) {
@@ -203,28 +268,15 @@ function drawTiledPlan(ctx, model, scope, toCanvas, center, totalLayers, visual)
       const a = toCanvas(tile.a);
       const b = toCanvas(tile.b);
       const c = toCanvas(tile.c);
-      const base = TRI_TYPE_COLORS[tile.kind] ?? triangleColor(model.axisColors, tile.a, tile.b, tile.c);
-      const fill = rgbToStyle(shadeRgb(base, shade), alpha);
-      const edge = rgbToStyle(shadeRgb(base, 0.45), 0.78);
+      const base = triangleShapeColor(tile.a, tile.b, tile.c);
+      const fill = rgbToStyle(base, alpha);
+      const edge = rgbToStyle(shadeRgb(base, 0.58), 0.78);
 
       drawTriangle(ctx, a, b, c, fill, edge, visual.tileEdgeWidth);
     }
   }
 
-  const finalLayer = model.layers[model.layers.length - 1];
-  for (const point of finalLayer.points) {
-    if (!inScope(point, scope)) {
-      continue;
-    }
-    const p = toCanvas(point);
-    const color = shadeRgb(hexToRgb(model.axisColors[point.axis]), 0.95);
-    ctx.beginPath();
-    ctx.moveTo(center.x, center.y);
-    ctx.lineTo(p.x, p.y);
-    ctx.strokeStyle = rgbToStyle(color, 0.32);
-    ctx.lineWidth = visual.axisWidth;
-    ctx.stroke();
-  }
+  drawAxisSegments(ctx, model, scope, toCanvas, visual, 0.32);
 }
 
 function drawLegacyPlan(ctx, model, scope, toCanvas, center, totalLayers, visual) {
@@ -270,17 +322,19 @@ function drawLegacyPlan(ctx, model, scope, toCanvas, center, totalLayers, visual
     }
   }
 
-  const finalLayer = model.layers[model.layers.length - 1];
-  for (const index of indices) {
-    const point = finalLayer.points[index];
-    const p = toCanvas(point);
-    const color = shadeRgb(hexToRgb(model.axisColors[point.axis]), 0.95);
-    ctx.beginPath();
-    ctx.moveTo(center.x, center.y);
-    ctx.lineTo(p.x, p.y);
-    ctx.strokeStyle = rgbToStyle(color, 0.38);
-    ctx.lineWidth = visual.axisWidth;
-    ctx.stroke();
+  if (!drawAxisSegments(ctx, model, scope, toCanvas, visual, 0.38)) {
+    const finalLayer = model.layers[model.layers.length - 1];
+    for (const index of indices) {
+      const point = finalLayer.points[index];
+      const p = toCanvas(point);
+      const color = shadeRgb(hexToRgb(model.axisColors[point.axis]), 0.95);
+      ctx.beginPath();
+      ctx.moveTo(center.x, center.y);
+      ctx.lineTo(p.x, p.y);
+      ctx.strokeStyle = rgbToStyle(color, 0.38);
+      ctx.lineWidth = visual.axisWidth;
+      ctx.stroke();
+    }
   }
 }
 
@@ -319,6 +373,122 @@ function drawLayerProfiles(ctx, model, scope, toCanvas, visual) {
   }
 }
 
+function formatAmount(value) {
+  if (!Number.isFinite(value)) {
+    return "0";
+  }
+  if (Math.abs(value) < 1e-6) {
+    return "0";
+  }
+  return Number(value.toFixed(3)).toString();
+}
+
+function drawArrowSegment(ctx, from, to, strokeStyle, width = 1) {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const len = Math.hypot(dx, dy);
+  if (len < 1) {
+    return;
+  }
+
+  ctx.strokeStyle = strokeStyle;
+  ctx.lineWidth = width;
+  ctx.beginPath();
+  ctx.moveTo(from.x, from.y);
+  ctx.lineTo(to.x, to.y);
+  ctx.stroke();
+
+  const ux = dx / len;
+  const uy = dy / len;
+  const head = clamp(3 + width * 2, 4, 10);
+  const wing = head * 0.55;
+  const bx = to.x - ux * head;
+  const by = to.y - uy * head;
+  const nx = -uy;
+  const ny = ux;
+
+  ctx.fillStyle = strokeStyle;
+  ctx.beginPath();
+  ctx.moveTo(to.x, to.y);
+  ctx.lineTo(bx + nx * wing, by + ny * wing);
+  ctx.lineTo(bx - nx * wing, by - ny * wing);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawGrowthDebug(ctx, model, scope, toCanvas, visual) {
+  if (!visual.showGrowthArrows && !visual.showGrowthValues) {
+    return;
+  }
+  const segments = [...(model.axisSegments ?? [])];
+  if (!segments.length) {
+    return;
+  }
+
+  // Draw secondary-axis arrows last so green branching remains visible in dense layers.
+  segments.sort((a, b) => {
+    const pa = a.axis === "secondary" ? 1 : 0;
+    const pb = b.axis === "secondary" ? 1 : 0;
+    return pa - pb;
+  });
+
+  let maxLayer = 1;
+  for (const segment of segments) {
+    maxLayer = Math.max(maxLayer, segment.layer ?? 1);
+  }
+
+  for (const segment of segments) {
+    const child = segment.a;
+    const parent = segment.b;
+    if (!child || !parent || !inScope(child, scope) || !inScope(parent, scope)) {
+      continue;
+    }
+
+    const from = toCanvas(parent);
+    const to = toCanvas(child);
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 2) {
+      continue;
+    }
+
+    const depth = (segment.layer ?? 1) / maxLayer;
+    const displayAxis = segmentDisplayAxis(segment);
+    const axisColor = model.axisColors?.[displayAxis] ?? "#5e5447";
+    const base = shadeRgb(hexToRgb(axisColor), 0.85);
+    const isGreenOnOrth = segment.axis === "secondary" && segment.parentAxis === "orthogonal";
+    const alpha = clamp((0.18 + depth * 0.44) + (isGreenOnOrth ? 0.18 : 0), 0.12, 0.85);
+    const stroke = rgbToStyle(base, alpha);
+
+    if (visual.showGrowthArrows) {
+      const width = isGreenOnOrth
+        ? Math.max(1.1, visual.axisWidth * 1.25)
+        : Math.max(0.7, visual.axisWidth * 0.85);
+      drawArrowSegment(ctx, from, to, stroke, width);
+    }
+
+    if (visual.showGrowthValues && child.token) {
+      const token = String(child.token).toLowerCase();
+      const amount = formatAmount(child.amount);
+      const label = `${token}:${amount}`;
+      const nx = -dy / len;
+      const ny = dx / len;
+      const lx = from.x + dx * 0.56 + nx * 5;
+      const ly = from.y + dy * 0.56 + ny * 5;
+      const fontSize = clamp(visual.annotationSize - 2, 7, 16);
+
+      ctx.font = `${fontSize}px "IBM Plex Sans", sans-serif`;
+      const w = ctx.measureText(label).width;
+      const h = fontSize + 2;
+      ctx.fillStyle = rgbToStyle({ r: 252, g: 248, b: 242 }, 0.82);
+      ctx.fillRect(lx - 2, ly - h + 2, w + 4, h);
+      ctx.fillStyle = rgbToStyle({ r: 35, g: 31, b: 27 }, 0.92);
+      ctx.fillText(label, lx, ly);
+    }
+  }
+}
+
 function drawPointAnnotations(ctx, model, scope, toCanvas, visual) {
   if (!visual.showPointMarkers && !visual.showAnnotations) {
     return;
@@ -333,7 +503,17 @@ function drawPointAnnotations(ctx, model, scope, toCanvas, visual) {
   const labelStart = Math.max(1, topLayer - 1);
 
   for (let li = 1; li < layers.length; li += 1) {
-    const points = sortPointsByAngle(layers[li].points.filter((p) => inScope(p, scope)));
+    const unique = new Map();
+    for (const point of layers[li].points) {
+      if (!inScope(point, scope)) {
+        continue;
+      }
+      const key = `${point.x.toFixed(6)},${point.y.toFixed(6)}`;
+      if (!unique.has(key)) {
+        unique.set(key, point);
+      }
+    }
+    const points = sortPointsByAngle(Array.from(unique.values()));
     const depth = li / Math.max(1, topLayer);
     const markerAlpha = li >= labelStart ? 0.92 : 0.4;
 
@@ -358,7 +538,7 @@ function drawPointAnnotations(ctx, model, scope, toCanvas, visual) {
   }
 }
 
-export function renderPlan(canvas, model, scope, rawVisual = {}) {
+export function renderPlan(canvas, model, scope, rawVisual = {}, viewState = null) {
   const visual = normalizeVisual(rawVisual);
   const ctx = canvas.getContext("2d");
   const { width, height, dpr } = resizeCanvas(canvas);
@@ -382,9 +562,24 @@ export function renderPlan(canvas, model, scope, rawVisual = {}) {
   const scale = Math.min((cssWidth - pad * 2) / spanX, (cssHeight - pad * 2) / spanY);
 
   const toCanvas = (point) => {
-    const x = pad + (point.x - bounds.minX) * scale;
-    const y = cssHeight - (pad + (point.y - bounds.minY) * scale);
-    return { x, y };
+    const raw = {
+      x: pad + (point.x - bounds.minX) * scale,
+      y: cssHeight - (pad + (point.y - bounds.minY) * scale),
+    };
+
+    if (!viewState) {
+      return raw;
+    }
+
+    const zoom = clamp(Number(viewState.zoom) || 1, 0.35, 8);
+    const panX = Number(viewState.panX) || 0;
+    const panY = Number(viewState.panY) || 0;
+    const cx = cssWidth * 0.5;
+    const cy = cssHeight * 0.5;
+    return {
+      x: (raw.x - cx) * zoom + cx + panX,
+      y: (raw.y - cy) * zoom + cy + panY,
+    };
   };
 
   const center = toCanvas({ x: 0, y: 0 });
@@ -405,12 +600,30 @@ export function renderPlan(canvas, model, scope, rawVisual = {}) {
     ctx.stroke();
   }
 
-  if (hasTiles) {
-    drawTiledPlan(ctx, model, scope, toCanvas, center, totalLayers, visual);
+  if (visual.showTriangles) {
+    if (hasTiles) {
+      drawTiledPlan(ctx, model, scope, toCanvas, center, totalLayers, visual);
+    } else {
+      drawLegacyPlan(ctx, model, scope, toCanvas, center, totalLayers, visual);
+    }
   } else {
-    drawLegacyPlan(ctx, model, scope, toCanvas, center, totalLayers, visual);
+    if (!drawAxisSegments(ctx, model, scope, toCanvas, visual, 0.38)) {
+      const finalLayer = model.layers[model.layers.length - 1];
+      for (const index of indices) {
+        const point = finalLayer.points[index];
+        const p = toCanvas(point);
+        const color = shadeRgb(hexToRgb(model.axisColors[point.axis]), 0.95);
+        ctx.beginPath();
+        ctx.moveTo(center.x, center.y);
+        ctx.lineTo(p.x, p.y);
+        ctx.strokeStyle = rgbToStyle(color, 0.38);
+        ctx.lineWidth = visual.axisWidth;
+        ctx.stroke();
+      }
+    }
   }
   drawLayerProfiles(ctx, model, scope, toCanvas, visual);
+  drawGrowthDebug(ctx, model, scope, toCanvas, visual);
   drawPointAnnotations(ctx, model, scope, toCanvas, visual);
 
   ctx.fillStyle = "#5f6a6b";

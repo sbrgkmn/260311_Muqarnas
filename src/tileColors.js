@@ -2,6 +2,21 @@ function clamp255(value) {
   return Math.max(0, Math.min(255, Math.round(value)));
 }
 
+const SHAPE_PALETTE = [
+  { r: 208, g: 167, b: 131 },
+  { r: 188, g: 144, b: 116 },
+  { r: 176, g: 124, b: 102 },
+  { r: 217, g: 185, b: 142 },
+  { r: 160, g: 129, b: 96 },
+  { r: 197, g: 168, b: 124 },
+  { r: 146, g: 120, b: 90 },
+  { r: 229, g: 201, b: 156 },
+  { r: 170, g: 140, b: 110 },
+  { r: 203, g: 176, b: 136 },
+  { r: 181, g: 150, b: 114 },
+  { r: 155, g: 132, b: 103 },
+];
+
 export function hexToRgb(hex) {
   const clean = String(hex || "#000000").replace("#", "");
   const normalized = clean.length === 3 ? clean.split("").map((x) => x + x).join("") : clean;
@@ -65,6 +80,73 @@ export function rgbToUnit(color) {
     g: clamp255(color.g) / 255,
     b: clamp255(color.b) / 255,
   };
+}
+
+function hashString(value) {
+  const input = String(value ?? "");
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function sideLength2D(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function angleFromSides(adjA, adjB, opposite) {
+  const den = Math.max(1e-8, 2 * adjA * adjB);
+  const cosValue = (adjA * adjA + adjB * adjB - opposite * opposite) / den;
+  const clamped = Math.max(-1, Math.min(1, cosValue));
+  return (Math.acos(clamped) * 180) / Math.PI;
+}
+
+function angleBucket(degrees) {
+  if (degrees < 88) {
+    return "a";
+  }
+  if (degrees <= 92) {
+    return "r";
+  }
+  return "o";
+}
+
+function edgeClass(a, b, eps = 1e-6) {
+  if (Math.abs(a.z - b.z) > eps) {
+    return "x";
+  }
+  const ra = Math.hypot(a.x, a.y);
+  const rb = Math.hypot(b.x, b.y);
+  if (Math.abs(ra - rb) <= 1e-4) {
+    return "r";
+  }
+  return "d";
+}
+
+export function triangleShapeSignature(a, b, c) {
+  const ab = sideLength2D(a, b);
+  const bc = sideLength2D(b, c);
+  const ca = sideLength2D(c, a);
+  const longest = Math.max(ab, bc, ca, 1e-8);
+
+  const ratios = [ab / longest, bc / longest, ca / longest].sort((x, y) => x - y);
+  const ratioKey = `${ratios[0].toFixed(2)}-${ratios[1].toFixed(2)}`;
+
+  const A = angleFromSides(ab, ca, bc);
+  const B = angleFromSides(ab, bc, ca);
+  const C = angleFromSides(bc, ca, ab);
+  const angleKey = [angleBucket(A), angleBucket(B), angleBucket(C)].sort().join("");
+
+  const edgeTypes = [edgeClass(a, b), edgeClass(b, c), edgeClass(c, a)].sort().join("");
+  return `${angleKey}|${edgeTypes}|${ratioKey}`;
+}
+
+export function triangleShapeColor(a, b, c) {
+  const signature = triangleShapeSignature(a, b, c);
+  const index = hashString(signature) % SHAPE_PALETTE.length;
+  return SHAPE_PALETTE[index];
 }
 
 export function tileTriangleColors(axisColors, p00, p01, p10, p11, connectionType) {

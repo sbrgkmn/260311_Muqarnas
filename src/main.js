@@ -1,10 +1,9 @@
-import { generateMuqarnas } from "./engine.js?v=20260321q";
-import { PRESETS, clonePreset, silverRatioUnits } from "./presets.js?v=20260321q";
-import { renderPlan } from "./renderPlan.js?v=20260321q";
-import { Muqarnas3DView } from "./render3d.js?v=20260321q";
+import { generateMuqarnas } from "./engine.js?v=20260324f";
+import { clonePreset, silverRatioUnits } from "./presets.js?v=20260324f";
+import { renderPlan } from "./renderPlan.js?v=20260324f";
+import { Muqarnas3DView } from "./render3d.js?v=20260324f";
 
 const dom = {
-  preset: document.getElementById("preset"),
   scope: document.getElementById("scope"),
   layers: document.getElementById("layers"),
   layerHeight: document.getElementById("layerHeight"),
@@ -19,11 +18,16 @@ const dom = {
   tileEdgeWidth: document.getElementById("tileEdgeWidth"),
   profileWidth: document.getElementById("profileWidth"),
   axisWidth: document.getElementById("axisWidth"),
+  profileWidthValue: document.getElementById("profileWidthValue"),
+  axisWidthValue: document.getElementById("axisWidthValue"),
   pointSize: document.getElementById("pointSize"),
   annotationSize: document.getElementById("annotationSize"),
+  showTriangles: document.getElementById("showTriangles"),
   showProfiles: document.getElementById("showProfiles"),
   showPointMarkers: document.getElementById("showPointMarkers"),
   showAnnotations: document.getElementById("showAnnotations"),
+  showGrowthArrows: document.getElementById("showGrowthArrows"),
+  showGrowthValues: document.getElementById("showGrowthValues"),
   resetView: document.getElementById("resetView"),
   planCanvas: document.getElementById("planCanvas"),
   threeRoot: document.getElementById("threeRoot"),
@@ -40,21 +44,8 @@ function assertDomBindings(bindings) {
 
 assertDomBindings(dom);
 
-let activePresetName = "Haci Kilic";
 let state = null;
 let currentModel = null;
-let suppressCustomFlag = false;
-const VISUAL_CONTROL_IDS = new Set([
-  "tileOpacity",
-  "tileEdgeWidth",
-  "profileWidth",
-  "axisWidth",
-  "pointSize",
-  "annotationSize",
-  "showProfiles",
-  "showPointMarkers",
-  "showAnnotations",
-]);
 
 const DEFAULT_VISUAL = {
   tileOpacity: 0.66,
@@ -63,22 +54,20 @@ const DEFAULT_VISUAL = {
   axisWidth: 1,
   pointSize: 2.4,
   annotationSize: 10,
+  showTriangles: false,
   showProfiles: true,
   showPointMarkers: true,
-  showAnnotations: true,
+  showAnnotations: false,
+  showGrowthArrows: true,
+  showGrowthValues: false,
 };
 
 const threeView = new Muqarnas3DView(dom.threeRoot);
-
-function fillPresetOptions() {
-  for (const name of Object.keys(PRESETS)) {
-    const option = document.createElement("option");
-    option.value = name;
-    option.textContent = name;
-    dom.preset.appendChild(option);
-  }
-  dom.preset.value = activePresetName;
-}
+const planView = {
+  zoom: 1,
+  panX: 0,
+  panY: 0,
+};
 
 function readNumber(value, fallback) {
   const parsed = Number(value);
@@ -93,11 +82,12 @@ function normalizePreset(rawState) {
   const source = rawState ?? {};
   const rules = source.rules ?? {};
   return {
-    scope: source.scope ?? "full",
-    layers: readNumber(source.layers, 12),
+    scope: "full",
+    layers: readNumber(source.layers, 3),
     layerHeight: readNumber(source.layerHeight, 1),
     heightPattern: typeof source.heightPattern === "string" ? source.heightPattern : "1,1,1",
     ratioScale: readNumber(source.ratioScale, 1),
+    triangulationStage: readNumber(source.triangulationStage, 1),
     collisionEpsilon: readNumber(source.collisionEpsilon, 0.05),
     ratios: silverRatioUnits(1),
     rules: {
@@ -111,9 +101,8 @@ function normalizePreset(rawState) {
 
 function applyStateToControls(nextState) {
   const safe = normalizePreset(nextState);
-  suppressCustomFlag = true;
 
-  dom.scope.value = safe.scope;
+  dom.scope.value = "full";
   dom.layers.value = String(safe.layers);
   dom.layerHeight.value = String(safe.layerHeight);
   dom.heightPattern.value = safe.heightPattern;
@@ -123,17 +112,16 @@ function applyStateToControls(nextState) {
   dom.ruleDiagonal.value = safe.rules.diagonal;
   dom.ruleSecondary.value = safe.rules.secondary;
   dom.connectionType.value = safe.connectionType;
-
-  suppressCustomFlag = false;
 }
 
 function collectStateFromControls() {
   return {
-    scope: dom.scope.value,
-    layers: readNumber(dom.layers.value, 12),
+    scope: "full",
+    layers: readNumber(dom.layers.value, 3),
     layerHeight: readNumber(dom.layerHeight.value, 1),
     heightPattern: dom.heightPattern.value,
     ratioScale: readNumber(dom.ratioScale.value, 1),
+    triangulationStage: 1,
     collisionEpsilon: readNumber(dom.collisionEpsilon.value, 0.05),
     ratios: silverRatioUnits(1),
     rules: {
@@ -154,10 +142,23 @@ function normalizeVisual(rawVisual) {
     axisWidth: clamp(readNumber(source.axisWidth, DEFAULT_VISUAL.axisWidth), 0.2, 6),
     pointSize: clamp(readNumber(source.pointSize, DEFAULT_VISUAL.pointSize), 0.4, 10),
     annotationSize: clamp(readNumber(source.annotationSize, DEFAULT_VISUAL.annotationSize), 7, 24),
+    showTriangles: source.showTriangles !== false,
     showProfiles: source.showProfiles !== false,
     showPointMarkers: source.showPointMarkers !== false,
     showAnnotations: source.showAnnotations !== false,
+    showGrowthArrows: source.showGrowthArrows !== false,
+    showGrowthValues: source.showGrowthValues !== false,
   };
+}
+
+function formatSliderValue(value) {
+  return Number(value).toFixed(1);
+}
+
+function syncLineweightOutputs(rawVisual) {
+  const visual = normalizeVisual(rawVisual);
+  dom.profileWidthValue.value = formatSliderValue(visual.profileWidth);
+  dom.axisWidthValue.value = formatSliderValue(visual.axisWidth);
 }
 
 function applyVisualToControls(rawVisual) {
@@ -168,75 +169,123 @@ function applyVisualToControls(rawVisual) {
   dom.axisWidth.value = String(visual.axisWidth);
   dom.pointSize.value = String(visual.pointSize);
   dom.annotationSize.value = String(visual.annotationSize);
+  dom.showTriangles.checked = visual.showTriangles;
   dom.showProfiles.checked = visual.showProfiles;
   dom.showPointMarkers.checked = visual.showPointMarkers;
   dom.showAnnotations.checked = visual.showAnnotations;
+  dom.showGrowthArrows.checked = visual.showGrowthArrows;
+  dom.showGrowthValues.checked = visual.showGrowthValues;
+  syncLineweightOutputs(visual);
 }
 
 function collectVisualFromControls() {
-  return normalizeVisual({
+  const visual = normalizeVisual({
     tileOpacity: dom.tileOpacity.value,
     tileEdgeWidth: dom.tileEdgeWidth.value,
     profileWidth: dom.profileWidth.value,
     axisWidth: dom.axisWidth.value,
     pointSize: dom.pointSize.value,
     annotationSize: dom.annotationSize.value,
+    showTriangles: dom.showTriangles.checked,
     showProfiles: dom.showProfiles.checked,
     showPointMarkers: dom.showPointMarkers.checked,
     showAnnotations: dom.showAnnotations.checked,
+    showGrowthArrows: dom.showGrowthArrows.checked,
+    showGrowthValues: dom.showGrowthValues.checked,
   });
+  syncLineweightOutputs(visual);
+  return visual;
 }
 
 function refresh(autoFrame = false) {
   state = normalizePreset(collectStateFromControls());
   const visual = collectVisualFromControls();
   currentModel = generateMuqarnas(state);
-  renderPlan(dom.planCanvas, currentModel, state.scope, visual);
+  renderPlan(dom.planCanvas, currentModel, state.scope, visual, planView);
   threeView.setModel(currentModel, state.scope, state.connectionType, autoFrame, visual);
 }
-
-function markCustom() {
-  if (suppressCustomFlag) {
-    return;
-  }
-  if (dom.preset.value !== "Custom") {
-    dom.preset.value = "Custom";
-    activePresetName = "Custom";
-  }
-}
-
-fillPresetOptions();
-state = normalizePreset(clonePreset(activePresetName));
+state = normalizePreset(clonePreset("Haci Kilic"));
 applyStateToControls(state);
 applyVisualToControls(DEFAULT_VISUAL);
 refresh(true);
 
-const controls = document.querySelectorAll("input, select");
-for (const control of controls) {
-  if (control.id === "preset") {
-    continue;
-  }
-  control.addEventListener("input", () => {
-    if (!VISUAL_CONTROL_IDS.has(control.id)) {
-      markCustom();
+function bindPlanInteractions() {
+  const canvas = dom.planCanvas;
+  canvas.style.cursor = "grab";
+  canvas.style.touchAction = "none";
+
+  let drag = null;
+
+  canvas.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const cx = rect.width * 0.5;
+    const cy = rect.height * 0.5;
+    const mx = event.clientX - rect.left;
+    const my = event.clientY - rect.top;
+    const sx = mx - cx;
+    const sy = my - cy;
+
+    const oldZoom = clamp(Number(planView.zoom) || 1, 0.35, 8);
+    const zoomFactor = event.deltaY < 0 ? 1.12 : (1 / 1.12);
+    const newZoom = clamp(oldZoom * zoomFactor, 0.35, 8);
+    if (Math.abs(newZoom - oldZoom) < 1e-6) {
+      return;
     }
+
+    planView.panX = sx - ((sx - planView.panX) / oldZoom) * newZoom;
+    planView.panY = sy - ((sy - planView.panY) / oldZoom) * newZoom;
+    planView.zoom = newZoom;
+    refresh(false);
+  }, { passive: false });
+
+  canvas.addEventListener("mousedown", (event) => {
+    if (event.button !== 0) {
+      return;
+    }
+    drag = { x: event.clientX, y: event.clientY };
+    canvas.style.cursor = "grabbing";
+  });
+
+  window.addEventListener("mousemove", (event) => {
+    if (!drag) {
+      return;
+    }
+    const dx = event.clientX - drag.x;
+    const dy = event.clientY - drag.y;
+    drag = { x: event.clientX, y: event.clientY };
+    planView.panX += dx;
+    planView.panY += dy;
     refresh(false);
   });
-  control.addEventListener("change", () => {
-    if (!VISUAL_CONTROL_IDS.has(control.id)) {
-      markCustom();
+
+  window.addEventListener("mouseup", () => {
+    if (!drag) {
+      return;
     }
+    drag = null;
+    canvas.style.cursor = "grab";
+  });
+
+  canvas.addEventListener("dblclick", () => {
+    planView.zoom = 1;
+    planView.panX = 0;
+    planView.panY = 0;
     refresh(false);
   });
 }
 
-dom.preset.addEventListener("change", (event) => {
-  const name = event.target.value;
-  activePresetName = name;
-  const preset = normalizePreset(clonePreset(name));
-  applyStateToControls(preset);
-  refresh(true);
-});
+bindPlanInteractions();
+
+const controls = document.querySelectorAll("input, select");
+for (const control of controls) {
+  control.addEventListener("input", () => {
+    refresh(false);
+  });
+  control.addEventListener("change", () => {
+    refresh(false);
+  });
+}
 
 dom.resetView.addEventListener("click", () => {
   if (!currentModel) {
@@ -249,5 +298,5 @@ window.addEventListener("resize", () => {
   if (!currentModel) {
     return;
   }
-  renderPlan(dom.planCanvas, currentModel, state.scope, collectVisualFromControls());
+  renderPlan(dom.planCanvas, currentModel, state.scope, collectVisualFromControls(), planView);
 });

@@ -22,10 +22,11 @@ export function silverDelta() {
 function basePreset() {
   return {
     scope: "full",
-    layers: 12,
+    layers: 3,
     layerHeight: 1,
     heightPattern: "1,1,1",
     ratioScale: 1,
+    triangulationStage: 1,
     ratios: silverRatioUnits(1),
     rules: {
       orthogonal: "b,c,b,0",
@@ -37,58 +38,20 @@ function basePreset() {
   };
 }
 
+export const HACI_KILIC_PRESET = {
+  ...basePreset(),
+  rules: {
+    orthogonal: "b,c,b,0",
+    diagonal: "b,c",
+    secondary: "a,a,d",
+  },
+  connectionType: "convergent",
+};
+
 export const PRESETS = {
-  "Haci Kilic": {
-    ...basePreset(),
-    rules: {
-      orthogonal: "b,c,b,0",
-      diagonal: "b,c",
-      secondary: "a,a,d",
-    },
-    connectionType: "convergent",
-  },
-
-  "Cifte Minaret": {
-    ...basePreset(),
-    rules: {
-      orthogonal: "a,a,0,0,d,a",
-      diagonal: "a,a,d",
-      secondary: "b,c,0,0",
-    },
-    connectionType: "convergent",
-  },
-
-  "Sifaiye": {
-    ...basePreset(),
-    rules: {
-      orthogonal: "c,b,b,0",
-      diagonal: "c,b",
-      secondary: "a,x,0",
-    },
-    connectionType: "divergent",
-  },
-
-  "Gevher Nesibe": {
-    ...basePreset(),
-    rules: {
-      orthogonal: "a,x,0,0,a,0",
-      diagonal: "a,x,a",
-      secondary: "b,c,b,0",
-    },
-    connectionType: "convergent",
-  },
-
-  "Custom": {
-    ...basePreset(),
-    rules: {
-      orthogonal: "b,c,b,0",
-      diagonal: "b,c",
-      secondary: "a,a,d",
-    },
-    connectionType: "convergent",
-  },
+  "Haci Kilic": HACI_KILIC_PRESET,
 };
 
 export function clonePreset(name) {
-  return JSON.parse(JSON.stringify(PRESETS[name] ?? PRESETS.Custom));
+  return JSON.parse(JSON.stringify(PRESETS[name] ?? HACI_KILIC_PRESET));
 }

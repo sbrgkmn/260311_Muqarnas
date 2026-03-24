@@ -1,4 +1,4 @@
-import { BASE_ANGLE_DEG, BRANCH_COUNT, silverRatioUnits } from "./presets.js?v=20260321q";
+import { BASE_ANGLE_DEG, BRANCH_COUNT, silverRatioUnits } from "./presets.js?v=20260324b";
 
 const AXIS = {
   ORTHOGONAL: "orthogonal",
@@ -83,6 +83,9 @@ function toVertex(point) {
     parentId: point.parent?.id ?? null,
     pp: !!point.pp,
     c: !!point.c,
+    token: point.stepToken ?? null,
+    amount: Number.isFinite(point.stepAmount) ? point.stepAmount : 0,
+    stepType: point.stepType ?? null,
   };
 }
 
@@ -347,7 +350,19 @@ function parseHeightPattern(raw) {
 let pointId = 1;
 
 class GrowthPoint {
-  constructor({ x, y, z, v, axis, m, index, parent = null }) {
+  constructor({
+    x,
+    y,
+    z,
+    v,
+    axis,
+    m,
+    index,
+    parent = null,
+    stepToken = null,
+    stepAmount = 0,
+    stepType = null,
+  }) {
     this.id = pointId;
     pointId += 1;
 
@@ -368,6 +383,9 @@ class GrowthPoint {
     this.pp = false;
     this.L = null;
     this.R = null;
+    this.stepToken = stepToken ? String(stepToken).toLowerCase() : null;
+    this.stepAmount = Number.isFinite(stepAmount) ? stepAmount : 0;
+    this.stepType = stepType ?? (parent ? "derived" : "root");
   }
 
   copy(secondLength) {
@@ -380,6 +398,9 @@ class GrowthPoint {
       m: this.m,
       index: (this.index + 1) % secondLength,
       parent: this,
+      stepToken: "v",
+      stepAmount: 0,
+      stepType: "copy",
     });
     this.children.push(cloned);
     return cloned;
@@ -400,6 +421,9 @@ class GrowthPoint {
       m,
       index,
       parent: this,
+      stepToken: amountToken,
+      stepAmount: amount,
+      stepType: "rotate",
     });
 
     this.children.push(next);
@@ -422,6 +446,9 @@ class GrowthPoint {
       m,
       index,
       parent: this,
+      stepToken: amountToken,
+      stepAmount: amount,
+      stepType: "linear",
     });
 
     if (Math.abs(amount) < EPS) {
@@ -450,6 +477,28 @@ class GrowthPoint {
   getAngle(secondRule, units) {
     if (!this.L || !this.R) {
       return 180;
+    }
+
+    // For terminated orthogonal points (token 0 / in-place vertical move),
+    // measure a one-sided local deflection from the inherited axis direction.
+    // Use preserved growth direction (`v`) rather than radial fallback so the
+    // branch angle stays consistent with the original red-axis direction.
+    if (this.pp && this.axis) {
+      const axisDir = norm(this.v.x, this.v.y, this.v);
+      const neighbors = [this.L, this.R].filter(Boolean);
+      let best = Infinity;
+      for (const neighbor of neighbors) {
+        const toNeighbor = vectorTo(this, neighbor);
+        const delta = angleBetween(axisDir, toNeighbor);
+        const local = Math.min(delta, 360 - delta);
+        if (local > EPS && local < best) {
+          best = local;
+        }
+      }
+      if (Number.isFinite(best)) {
+        const snapped = Math.max(BASE_ANGLE_DEG, Math.round(best / BASE_ANGLE_DEG) * BASE_ANGLE_DEG);
+        return snapped;
+      }
     }
 
     if (dist(this.L, this.R) < 0.1 && this.parent?.L && this.parent?.R) {
@@ -487,13 +536,70 @@ class GrowthPoint {
     return angleBetween(v2, v1);
   }
 
-  branch(diagonalRule, secondaryRule, units) {
+  branch(diagonalRule, secondaryRule, units, orthogonalRule = []) {
     const diagonalFirst = diagonalRule[0] ?? "b";
     const secondaryFirst = secondaryRule[0] ?? "a";
 
+    // Full-dome orthogonal convergence rule:
+    // when a red-axis point has just terminated in place (token 0),
+    // spawn two symmetric secondary branches at +/-22.5 degrees AND
+    // continue one forward orthogonal advance along the inherited red axis.
+    if (this.pp && this.axis) {
+      const orthFirstRaw = orthogonalRule[0] ?? "b";
+      const orthFirst = isBranchToken(orthFirstRaw) ? "b" : orthFirstRaw;
+      const amount = convertToken(secondaryFirst, units);
+      const forwardAmount = convertToken(orthFirst, units);
+      const dirs = [
+        rotate(this.v, -BASE_ANGLE_DEG),
+        rotate(this.v, BASE_ANGLE_DEG),
+      ];
+      const out = [];
+
+      for (const rawDir of dirs) {
+        const dir = norm(rawDir.x, rawDir.y, this.v);
+        const move = { x: dir.x * amount, y: dir.y * amount };
+        const child = new GrowthPoint({
+          x: this.x + move.x,
+          y: this.y + move.y,
+          z: this.z,
+          v: dir,
+          axis: false,
+          m: false,
+          index: 0,
+          parent: this,
+          stepToken: secondaryFirst,
+          stepAmount: amount,
+          stepType: "branch",
+        });
+        this.children.push(child);
+        out.push(child);
+      }
+
+      const forward = new GrowthPoint({
+        x: this.x + this.v.x * forwardAmount,
+        y: this.y + this.v.y * forwardAmount,
+        z: this.z,
+        v: this.v,
+        axis: true,
+        m: true,
+        index: 0,
+        parent: this,
+        stepToken: orthFirst,
+        stepAmount: forwardAmount,
+        stepType: "branch",
+      });
+      this.children.push(forward);
+      out.push(forward);
+
+      return out;
+    }
+
     const angle = this.getAngle(secondaryRule, units);
     let dir = rotate(this.v, -(angle / 45) * BASE_ANGLE_DEG);
-    const count = Math.max(1, Math.round(angle / BASE_ANGLE_DEG + 1));
+    const baseCount = this.pp && this.axis
+      ? angle / BASE_ANGLE_DEG
+      : angle / BASE_ANGLE_DEG + 1;
+    const count = Math.max(1, Math.round(baseCount));
     const out = [];
 
     for (let i = 0; i < count; i += 1) {
@@ -547,6 +653,9 @@ class GrowthPoint {
         m: (count - 1) % 4 === 0 ? i % 2 === 0 : i % 2 === 1,
         index: 0,
         parent: this,
+        stepToken: token,
+        stepAmount: amount,
+        stepType: "branch",
       });
 
       this.children.push(child);
@@ -575,7 +684,7 @@ class GrowthPoint {
         const nextIndex = (this.index + 1) % orthogonal.length;
         const token = orthogonal[nextIndex];
         if (nextIndex === 0 || isBranchToken(token)) {
-          return this.branch(diagonal, secondary, units);
+          return this.branch(diagonal, secondary, units, orthogonal);
         }
         if (heightValue === 0) {
           return this.advance(token, nextIndex, secondary.length, units);
@@ -586,7 +695,7 @@ class GrowthPoint {
       const nextIndex = (this.index + 1) % diagonal.length;
       const token = diagonal[nextIndex];
       if (g % diagonal.length === 0 || isBranchToken(token)) {
-        return this.branch(diagonal, secondary, units);
+        return this.branch(diagonal, secondary, units, orthogonal);
       }
       if (heightValue === 0) {
         return this.advance(token, nextIndex, secondary.length, units);
@@ -604,16 +713,19 @@ class GrowthPoint {
   }
 }
 
-function buildEdgePanels(points, connectionType) {
-  if (!points.length) {
+function buildEdgePanels(points, connectionType, options = {}) {
+  const { closed = true } = options;
+  const ordered = sortByPolar(points);
+  if (ordered.length < 2) {
     return [];
   }
   const triangles = [];
-  assignNeighbors(points);
+  const start = closed ? 0 : 1;
 
   const baseDivergent = connectionType === "divergent";
-  for (const p of points) {
-    const q = p.R;
+  for (let i = start; i < ordered.length; i += 1) {
+    const p = ordered[i];
+    const q = ordered[(i - 1 + ordered.length) % ordered.length];
     const pParent = p._meshParent ?? p.parent;
     const qParent = q?._meshParent ?? q?.parent;
     if (!q || !pParent || !qParent) {
@@ -653,6 +765,39 @@ function buildEdgePanels(points, connectionType) {
   }
 
   return uniqueTriangles(triangles);
+}
+
+function inScopeForPanels(point, scope, eps = 1e-6) {
+  if (scope === "full") {
+    return true;
+  }
+  if (scope === "quadrant") {
+    return point.x >= -eps && point.y >= -eps;
+  }
+  if (scope === "half") {
+    return point.y >= -eps;
+  }
+  return true;
+}
+
+function mirrorVertexAcrossDiagonal(vertex) {
+  return {
+    ...vertex,
+    x: Math.abs(vertex.y) < 1e-12 ? 0 : vertex.y,
+    y: Math.abs(vertex.x) < 1e-12 ? 0 : vertex.x,
+    pid: null,
+    parentId: null,
+  };
+}
+
+function enforceQuadrantDiagonalSymmetry(triangles) {
+  const mirrored = triangles.map((tri) => ({
+    a: mirrorVertexAcrossDiagonal(tri.a),
+    b: mirrorVertexAcrossDiagonal(tri.b),
+    c: mirrorVertexAcrossDiagonal(tri.c),
+    kind: tri.kind,
+  }));
+  return uniqueTriangles([...triangles, ...mirrored]);
 }
 
 function pointAngle01(p) {
@@ -745,7 +890,14 @@ function clearContourParentMap(contour) {
 }
 
 function inPrimaryQuadrant(point, eps = 1e-6) {
-  return point.x >= -eps && point.y >= -eps;
+  const radius = Math.hypot(point.x, point.y);
+  if (radius <= eps) {
+    return true;
+  }
+  // Use a half-open angular interval [0, 90deg) so only one rotated quadrant
+  // owns each seam axis and we avoid duplicate seam triangulation.
+  const angle = pointAngle01(point);
+  return angle >= -eps && angle < (Math.PI / 2) - eps;
 }
 
 function rotateVertexQuarter(vertex, quarterTurns) {
@@ -761,6 +913,51 @@ function rotateVertexQuarter(vertex, quarterTurns) {
     pid: null,
     parentId: null,
   };
+}
+
+function quarterTurnsForScope(scope) {
+  if (scope === "half") {
+    return [0, 1];
+  }
+  if (scope === "full") {
+    return [0, 1, 2, 3];
+  }
+  return [0];
+}
+
+function expandTrianglesFromQuadrant(triangles, scope) {
+  const turns = quarterTurnsForScope(scope);
+  const out = [];
+  for (const tri of triangles ?? []) {
+    for (const turn of turns) {
+      if (turn === 0) {
+        out.push({
+          a: { ...tri.a },
+          b: { ...tri.b },
+          c: { ...tri.c },
+          kind: tri.kind,
+        });
+      } else {
+        out.push({
+          a: rotateVertexQuarter(tri.a, turn),
+          b: rotateVertexQuarter(tri.b, turn),
+          c: rotateVertexQuarter(tri.c, turn),
+          kind: tri.kind,
+        });
+      }
+    }
+  }
+  return uniqueTriangles(out);
+}
+
+function expandTileLayersFromQuadrant(tileLayers, scope) {
+  if (scope === "quadrant") {
+    return tileLayers;
+  }
+  return (tileLayers ?? []).map((tileLayer) => ({
+    ...tileLayer,
+    triangles: expandTrianglesFromQuadrant(tileLayer.triangles ?? [], scope),
+  }));
 }
 
 function swapConnectionType(connectionType) {
@@ -793,10 +990,7 @@ function verticalKind(connectionType, lowerA, lowerB, upperA, upperB) {
 }
 
 function triangulateStripByAngle(upperStrip, lowerStrip, connectionType, options = {}) {
-  const {
-    anchorStart = false,
-    anchorEnd = false,
-  } = options;
+  const { anchorStart = false } = options;
 
   const triangles = [];
   if (!upperStrip.length || !lowerStrip.length) {
@@ -881,18 +1075,6 @@ function triangulateStripByAngle(upperStrip, lowerStrip, connectionType, options
     li += 1;
   }
 
-  if (anchorEnd && lower.length > 1) {
-    const uLast = upper[upper.length - 1];
-    const lPrev = lower[lower.length - 2];
-    const lLast = lower[lower.length - 1];
-    const kind = verticalKind(connectionType, lPrev, lLast, uLast, uLast);
-    if (connectionType === "divergent") {
-      pushTriangle(triangles, lPrev, lLast, uLast, kind);
-    } else {
-      pushTriangle(triangles, uLast, lPrev, lLast, kind);
-    }
-  }
-
   return triangles;
 }
 
@@ -921,13 +1103,18 @@ function interLayerEdges(tri) {
 }
 
 function trianglesCrossInPlan(t1, t2) {
-  if (trianglesShareVertex(t1, t2)) {
-    return false;
-  }
   const edges1 = interLayerEdges(t1);
   const edges2 = interLayerEdges(t2);
   for (const [a, b] of edges1) {
     for (const [c, d] of edges2) {
+      if (
+        dist(a, c) < 1e-8 ||
+        dist(a, d) < 1e-8 ||
+        dist(b, c) < 1e-8 ||
+        dist(b, d) < 1e-8
+      ) {
+        continue;
+      }
       if (segmentsIntersectStrict2D(a, b, c, d)) {
         return true;
       }
@@ -990,7 +1177,7 @@ function buildSymmetricPanelsFromQuadrant(upperContour, lowerContour, connection
         anchorEnd: true,
       }));
     }
-    return pruneCrossingTriangles(uniqueTriangles(local).filter((t) => !hasCrossingLikeEdge(t)));
+    return pruneCrossingTriangles(uniqueTriangles(local).filter((t) => isValidBandTriangle(t)));
   };
 
   const mirrored = buildQuadrant(swapConnectionType(connectionType));
@@ -1152,6 +1339,25 @@ function hasCrossingLikeEdge(tri) {
   return false;
 }
 
+function hasInwardInterLayerEdge(tri, eps = 1e-6) {
+  const edges = [[tri.a, tri.b], [tri.b, tri.c], [tri.c, tri.a]];
+  for (const [a, b] of edges) {
+    if (Math.abs(a.z - b.z) < 1e-8) {
+      continue;
+    }
+    const upper = a.z > b.z ? a : b;
+    const lower = a.z > b.z ? b : a;
+    if (pointRadius(lower) + eps < pointRadius(upper)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isValidBandTriangle(tri) {
+  return !hasCrossingLikeEdge(tri);
+}
+
 function orientation2D(a, b, c) {
   return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
 }
@@ -1238,6 +1444,400 @@ function buildLayerSnapshot(points, layer) {
   return { layer, z, branchCount, points: visiblePoints };
 }
 
+function sortScopedLayerPoints(points, scope) {
+  return sortByPolar(points.filter((p) => inScopeForPanels(p, scope)));
+}
+
+function uniqueScopedLayerPoints(points, scope) {
+  const ordered = sortScopedLayerPoints(points, scope);
+  const unique = [];
+  const seen = new Set();
+  for (const point of ordered) {
+    const key = `${point.x.toFixed(6)}|${point.y.toFixed(6)}|${point.z.toFixed(6)}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    unique.push(point);
+  }
+  return unique;
+}
+
+function makeTriangleFromVertices(a, b, c, kind = "generic") {
+  if (!a || !b || !c) {
+    return null;
+  }
+  if (triangleArea3D(a, b, c) < 1e-8) {
+    return null;
+  }
+  return { a, b, c, kind };
+}
+
+function nearestUpperIndexByAngle(upper, point) {
+  if (!upper.length) {
+    return 0;
+  }
+  const target = pointAngle01(point);
+  let best = 0;
+  let bestDelta = Infinity;
+  for (let i = 0; i < upper.length; i += 1) {
+    const d = Math.abs(pointAngle01(upper[i]) - target);
+    const wrapped = Math.min(d, Math.PI * 2 - d);
+    if (wrapped < bestDelta) {
+      bestDelta = wrapped;
+      best = i;
+    }
+  }
+  return best;
+}
+
+function buildMonotonicParentIndex(upper, lower, closed = false) {
+  if (!upper.length || !lower.length) {
+    return [];
+  }
+  const n = upper.length;
+  const raw = lower.map((point) => nearestUpperIndexByAngle(upper, point));
+  if (!closed || raw.length <= 1) {
+    return raw;
+  }
+
+  const unwrapped = new Array(raw.length);
+  unwrapped[0] = raw[0];
+  for (let i = 1; i < raw.length; i += 1) {
+    let idx = raw[i];
+    while (idx < unwrapped[i - 1]) {
+      idx += n;
+    }
+    unwrapped[i] = idx;
+  }
+
+  return unwrapped.map((idx) => ((idx % n) + n) % n);
+}
+
+function appendTriangleNoCross(triangles, seen, candidate, priority = 1) {
+  if (!candidate || !isValidBandTriangle(candidate)) {
+    return;
+  }
+  const key = triangleKey(candidate);
+  if (seen.has(key)) {
+    return;
+  }
+
+  const conflicts = [];
+  for (let i = 0; i < triangles.length; i += 1) {
+    if (trianglesCrossInPlan(triangles[i], candidate)) {
+      conflicts.push(i);
+    }
+  }
+
+  if (conflicts.length) {
+    const canReplace = conflicts.every((idx) => (triangles[idx]._priority ?? 1) < priority);
+    if (!canReplace) {
+      return;
+    }
+    conflicts.sort((a, b) => b - a);
+    for (const idx of conflicts) {
+      const removed = triangles[idx];
+      seen.delete(triangleKey(removed));
+      triangles.splice(idx, 1);
+    }
+  }
+
+  candidate._priority = priority;
+  seen.add(key);
+  triangles.push(candidate);
+}
+
+function buildRecursiveBandTriangles(upper, lower, connectionType, options = {}) {
+  const { closed = false, stage = 1 } = options;
+  if (!upper.length || !lower.length) {
+    return [];
+  }
+
+  const kind = connectionType === "divergent" ? "divergent" : "convergent";
+  const resolveAxis = (point) => {
+    if (!point) {
+      return AXIS.SECONDARY;
+    }
+    if (typeof point.axis === "string") {
+      return point.axis;
+    }
+    return axisKey(point);
+  };
+  const upperOrdered = sortByPolar(upper);
+  const lowerOrdered = sortByPolar(lower);
+
+  const prevIndex = (index, size) => (closed ? (index - 1 + size) % size : (index > 0 ? index - 1 : null));
+  const nextIndex = (index, size) => (closed ? (index + 1) % size : (index < size - 1 ? index + 1 : null));
+  const parentIndex = buildMonotonicParentIndex(upperOrdered, lowerOrdered, closed);
+  const groups = Array.from({ length: upperOrdered.length }, () => []);
+  for (let li = 0; li < lowerOrdered.length; li += 1) {
+    groups[parentIndex[li]].push(li);
+  }
+
+  const candidates = [];
+  const add = (a, b, c, triKind = kind, priority = 1) => {
+    const tri = makeTriangleFromVertices(a, b, c, triKind);
+    if (!tri || !isValidBandTriangle(tri)) {
+      return;
+    }
+    tri._priority = priority;
+    candidates.push(tri);
+  };
+
+  // Priority 1: fan triangles from primary (red/blue) anchors.
+  for (let ui = 0; ui < upperOrdered.length; ui += 1) {
+    const indices = groups[ui];
+    if (indices.length < 2 || resolveAxis(upperOrdered[ui]) === AXIS.SECONDARY) {
+      continue;
+    }
+    for (let i = 0; i < indices.length - 1; i += 1) {
+      add(upperOrdered[ui], lowerOrdered[indices[i]], lowerOrdered[indices[i + 1]], "fan", 5);
+    }
+  }
+
+  // Priority 2: symmetric parent-neighbor wedges.
+  for (let ui = 0; ui < upperOrdered.length; ui += 1) {
+    const indices = groups[ui];
+    if (!indices.length) {
+      continue;
+    }
+    const leftIndex = prevIndex(ui, upperOrdered.length);
+    const rightIndex = nextIndex(ui, upperOrdered.length);
+    if (leftIndex === null || rightIndex === null) {
+      continue;
+    }
+    add(upperOrdered[leftIndex], upperOrdered[ui], lowerOrdered[indices[0]], kind, 6);
+    add(upperOrdered[ui], upperOrdered[rightIndex], lowerOrdered[indices[indices.length - 1]], kind, 6);
+  }
+
+  // Priority 3: diagonal bridge rule for closed ring.
+  if (closed && stage >= 2) {
+    for (let ui = 0; ui < upperOrdered.length; ui += 1) {
+      const indices = groups[ui];
+      if (!indices.length || resolveAxis(upperOrdered[ui]) !== AXIS.DIAGONAL) {
+        continue;
+      }
+      const leftIndex = prevIndex(ui, upperOrdered.length);
+      const rightIndex = nextIndex(ui, upperOrdered.length);
+      if (leftIndex === null || rightIndex === null) {
+        continue;
+      }
+      const representative = lowerOrdered[indices[Math.floor(indices.length / 2)]];
+      add(upperOrdered[leftIndex], upperOrdered[rightIndex], representative, kind, 5);
+    }
+  }
+
+  // Priority 4: secondary fans.
+  if (stage >= 2) {
+    for (let ui = 0; ui < upperOrdered.length; ui += 1) {
+      const indices = groups[ui];
+      if (indices.length < 2 || resolveAxis(upperOrdered[ui]) !== AXIS.SECONDARY) {
+        continue;
+      }
+      for (let i = 0; i < indices.length - 1; i += 1) {
+        add(upperOrdered[ui], lowerOrdered[indices[i]], lowerOrdered[indices[i + 1]], kind, 4);
+      }
+    }
+  }
+
+  // Priority 5: seam fill on parent changes.
+  if (stage >= 3) {
+    const seamCount = closed ? lowerOrdered.length : (lowerOrdered.length - 1);
+    for (let li = 0; li < seamCount; li += 1) {
+      const lj = (li + 1) % lowerOrdered.length;
+      const ui = parentIndex[li];
+      const uj = parentIndex[lj];
+      if (ui === uj) {
+        continue;
+      }
+
+      const axisI = resolveAxis(upperOrdered[ui]);
+      const axisJ = resolveAxis(upperOrdered[uj]);
+      let pick = ui;
+      if (axisI === AXIS.SECONDARY && axisJ !== AXIS.SECONDARY) {
+        pick = uj;
+      } else if (axisJ === AXIS.SECONDARY && axisI !== AXIS.SECONDARY) {
+        pick = ui;
+      } else {
+        const midpoint = {
+          x: (lowerOrdered[li].x + lowerOrdered[lj].x) * 0.5,
+          y: (lowerOrdered[li].y + lowerOrdered[lj].y) * 0.5,
+        };
+        const aI = pointAngle01(upperOrdered[ui]);
+        const aJ = pointAngle01(upperOrdered[uj]);
+        const aM = pointAngle01(midpoint);
+        const dI = Math.min(Math.abs(aI - aM), Math.PI * 2 - Math.abs(aI - aM));
+        const dJ = Math.min(Math.abs(aJ - aM), Math.PI * 2 - Math.abs(aJ - aM));
+        pick = dI <= dJ ? ui : uj;
+      }
+      add(upperOrdered[pick], lowerOrdered[li], lowerOrdered[lj], kind, 1);
+    }
+  }
+
+  candidates.sort((a, b) => {
+    const pa = a._priority ?? 1;
+    const pb = b._priority ?? 1;
+    if (pa !== pb) {
+      return pb - pa;
+    }
+    const aa = triangleArea3D(a.a, a.b, a.c);
+    const ab = triangleArea3D(b.a, b.b, b.c);
+    return aa - ab;
+  });
+
+  const triangles = [];
+  const seen = new Set();
+  for (const candidate of candidates) {
+    appendTriangleNoCross(triangles, seen, candidate, candidate._priority ?? 1);
+  }
+
+  return triangles.map((tri) => ({
+    a: tri.a,
+    b: tri.b,
+    c: tri.c,
+    kind: tri.kind,
+  }));
+}
+
+function normalizeBandTriangles(triangles) {
+  return uniqueTriangles((triangles ?? []).filter((tri) => isValidBandTriangle(tri)));
+}
+
+function mergeTriangulationLayers(baseLayers, recursiveLayers, layerCount) {
+  const merged = [{ layer: 0, triangles: [] }];
+  for (let layer = 1; layer < layerCount; layer += 1) {
+    const base = baseLayers[layer]?.triangles ?? [];
+    const recursive = recursiveLayers[layer]?.triangles ?? [];
+    let triangles = normalizeBandTriangles([...base, ...recursive]);
+    if (!triangles.length) {
+      triangles = normalizeBandTriangles(base.length ? base : recursive);
+    }
+    merged.push({ layer, triangles });
+  }
+  return merged;
+}
+
+function enforceRecursiveAxisPriorityTriangulation(model, scopeOverride = null, options = {}) {
+  const correctionScope = scopeOverride ?? model?.params?.scope ?? "quadrant";
+  const closed = correctionScope === "full";
+  const mergeWithBase = options.mergeWithBase !== false;
+  const kind = model.params.connectionType === "divergent" ? "divergent" : "convergent";
+  const stage = clamp(Math.round(Number(model.params.triangulationStage) || 1), 1, 3);
+  const recursive = [{ layer: 0, triangles: [] }];
+  const layerCount = model.layers?.length ?? 0;
+
+  for (let layer = 1; layer < layerCount; layer += 1) {
+    const upper = uniqueScopedLayerPoints(model.layers[layer - 1]?.points ?? [], correctionScope);
+    const lower = uniqueScopedLayerPoints(model.layers[layer]?.points ?? [], correctionScope);
+    const triangles = buildRecursiveBandTriangles(upper, lower, kind, { closed, stage });
+    recursive.push({ layer, triangles });
+  }
+
+  if (!mergeWithBase) {
+    model.tileLayers = recursive;
+    return;
+  }
+
+  model.tileLayers = mergeTriangulationLayers(model.tileLayers ?? [], recursive, layerCount);
+}
+
+function insertTriangleWithConflictSwap(triangles, candidate) {
+  if (!candidate || !isValidBandTriangle(candidate)) {
+    return triangles;
+  }
+  const out = [...triangles].map((tri) => ({ ...tri, _priority: tri._priority ?? 3 }));
+  const seen = new Set(out.map((tri) => triangleKey(tri)));
+  appendTriangleNoCross(out, seen, candidate, 6);
+  return out.map((tri) => ({
+    a: tri.a,
+    b: tri.b,
+    c: tri.c,
+    kind: tri.kind,
+  }));
+}
+
+function enforceFullDomeRecursiveBridgeRules(model) {
+  if (model?.params?.scope !== "full") {
+    return;
+  }
+
+  const kind = model.params.connectionType === "divergent" ? "divergent" : "convergent";
+  for (let layer = 1; layer < (model.layers?.length ?? 0); layer += 1) {
+    const upper = uniqueScopedLayerPoints(model.layers[layer - 1]?.points ?? [], "full");
+    const lower = uniqueScopedLayerPoints(model.layers[layer]?.points ?? [], "full");
+    if (!upper.length || !lower.length) {
+      continue;
+    }
+
+    const parentIndex = buildMonotonicParentIndex(upper, lower, true);
+    const groups = Array.from({ length: upper.length }, () => []);
+    for (let li = 0; li < lower.length; li += 1) {
+      groups[parentIndex[li]].push(li);
+    }
+    const representativeForUpper = (ui) => {
+      const direct = groups[ui];
+      if (direct.length) {
+        return lower[direct[Math.floor(direct.length / 2)]];
+      }
+      const target = pointAngle01(upper[ui]);
+      let best = null;
+      let bestDelta = Infinity;
+      for (const candidate of lower) {
+        const d = Math.abs(pointAngle01(candidate) - target);
+        const wrapped = Math.min(d, Math.PI * 2 - d);
+        if (wrapped < bestDelta) {
+          bestDelta = wrapped;
+          best = candidate;
+        }
+      }
+      return best;
+    };
+
+    let band = uniqueTriangles((model.tileLayers[layer]?.triangles ?? []).filter((tri) => isValidBandTriangle(tri)));
+
+    // Rule 1: diagonal bridge, e.g. 1:0 & 1:2 -> 2:1.
+    for (let li = 0; li < lower.length; li += 1) {
+      const ui = parentIndex[li];
+      if (upper[ui]?.axis !== AXIS.DIAGONAL) {
+        continue;
+      }
+      const left = (ui - 1 + upper.length) % upper.length;
+      const right = (ui + 1) % upper.length;
+      const bridge = makeTriangleFromVertices(upper[left], upper[right], lower[li], kind);
+      band = insertTriangleWithConflictSwap(band, bridge);
+    }
+
+    // Rule 2: ensure all secondary (green) upper anchors contribute at least one tile.
+    for (let ui = 0; ui < upper.length; ui += 1) {
+      if (upper[ui]?.axis !== AXIS.SECONDARY) {
+        continue;
+      }
+      const uKey = vertexKey(upper[ui]);
+      const alreadyUsed = band.some((tri) => (
+        vertexKey(tri.a) === uKey || vertexKey(tri.b) === uKey || vertexKey(tri.c) === uKey
+      ));
+      if (alreadyUsed) {
+        continue;
+      }
+
+      const representative = representativeForUpper(ui);
+      if (!representative) {
+        continue;
+      }
+      const left = (ui - 1 + upper.length) % upper.length;
+      const right = (ui + 1) % upper.length;
+
+      const leftTri = makeTriangleFromVertices(upper[left], upper[ui], representative, kind);
+      const rightTri = makeTriangleFromVertices(upper[ui], upper[right], representative, kind);
+      band = insertTriangleWithConflictSwap(band, leftTri);
+      band = insertTriangleWithConflictSwap(band, rightTri);
+    }
+
+    model.tileLayers[layer].triangles = uniqueTriangles(band).filter((tri) => isValidBandTriangle(tri));
+  }
+}
+
 function buildUnits(rawParams) {
   const baseA = clamp(Number(rawParams?.ratios?.a) || 1, 0.1, 5);
   const ratioScale = clamp(Number(rawParams?.ratioScale) || 1, 0.05, 10);
@@ -1249,12 +1849,7 @@ function buildUnits(rawParams) {
 }
 
 export function getScopeRange(scope) {
-  if (scope === "quadrant") {
-    return { segmentCount: 4, closed: false };
-  }
-  if (scope === "half") {
-    return { segmentCount: 8, closed: false };
-  }
+  // Rebuild mode: always operate as full dome.
   return { segmentCount: 16, closed: true };
 }
 
@@ -1263,18 +1858,22 @@ export function generateMuqarnas(rawParams) {
 
   const params = {
     ...rawParams,
-    scope: rawParams.scope || "full",
+    scope: "full",
     layers: clamp(Math.round(Number(rawParams.layers) || 12), 1, 120),
     layerHeight: clamp(Number(rawParams.layerHeight) || 1, 0, 5),
     heightPattern: rawParams.heightPattern || "1,1,1",
     ratioScale: clamp(Number(rawParams.ratioScale) || 1, 0.05, 10),
     connectionType: rawParams.connectionType === "divergent" ? "divergent" : "convergent",
     collisionEpsilon: clamp(Number(rawParams.collisionEpsilon) || 0.05, 0.005, 1),
+    triangulationStage: clamp(Math.round(Number(rawParams.triangulationStage) || 1), 1, 3),
   };
 
   const units = buildUnits(params);
   const rules = parseRules(params.rules);
   const heights = parseHeightPattern(params.heightPattern);
+  // Build triangulation directly in the active scope so shared-axis seams
+  // (especially in full dome mode) are resolved from real adjacency.
+  const triangulationScope = params.scope === "full" ? "full" : params.scope;
 
   const root = new GrowthPoint({
     x: 0,
@@ -1293,7 +1892,6 @@ export function generateMuqarnas(rawParams) {
   const axisSegments = [];
 
   for (let g = 0; g < params.layers; g += 1) {
-    const previousContour = rotateContourByLargestGap(extractContourPoints(points));
     const next = [];
     const heightValue = heights[g % heights.length];
 
@@ -1326,23 +1924,7 @@ export function generateMuqarnas(rawParams) {
     moveVertical(next, -heightValue * params.layerHeight);
     enforceOutwardMonotonic(next);
     const checked = checkCollisions(next, params.collisionEpsilon);
-    const contour = alignContourToReference(
-      rotateContourByLargestGap(extractContourPoints(checked)),
-      previousContour,
-    );
-    assignNeighbors(contour);
-    mapContourParentsByAngle(contour, previousContour);
-
-    let triangles = buildSymmetricPanelsFromQuadrant(previousContour, contour, params.connectionType);
-
-    if (!triangles.length) {
-      triangles = buildRingBandTriangles(previousContour, contour, params.connectionType)
-        .map((t) => ({ ...t, kind: params.connectionType }))
-        .filter((t) => !hasCrossingLikeEdge(t));
-    }
-    clearContourParentMap(contour);
-
-    tileLayers.push({ layer: g + 1, triangles });
+    tileLayers.push({ layer: g + 1, triangles: [] });
 
     for (const p of checked) {
       if (!p.parent) {
@@ -1351,6 +1933,7 @@ export function generateMuqarnas(rawParams) {
       axisSegments.push({
         layer: g + 1,
         axis: axisKey(p),
+        parentAxis: axisKey(p.parent),
         a: toVertex(p),
         b: toVertex(p.parent),
       });
@@ -1364,7 +1947,7 @@ export function generateMuqarnas(rawParams) {
     }
   }
 
-  return {
+  const model = {
     params: {
       ...params,
       rules,
@@ -1377,4 +1960,10 @@ export function generateMuqarnas(rawParams) {
     axisColors: AXIS_COLORS,
     axisKeys: AXIS,
   };
+
+  // Phase 1 pipeline: keep growth + collision-driven band triangulation as
+  // authoritative, then rebuild triangulation recursively from parent-child
+  // layer topology in one deterministic post-pass.
+  enforceRecursiveAxisPriorityTriangulation(model, triangulationScope, { mergeWithBase: false });
+  return model;
 }

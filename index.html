@@ -14,15 +14,8 @@
 
         <div class="control-grid">
           <label>
-            Preset
-            <select id="preset"></select>
-          </label>
-
-          <label>
             Dome Scope
-            <select id="scope">
-              <option value="quadrant">Quadrant (90 deg)</option>
-              <option value="half">Half Dome (180 deg)</option>
+            <select id="scope" disabled>
               <option value="full" selected>Full Dome (360 deg)</option>
             </select>
           </label>
@@ -88,13 +81,19 @@
           </label>
 
           <label>
-            Layer Profile Weight
-            <input id="profileWidth" type="number" min="0.2" max="8" step="0.1" />
+            Layer Line Weight
+            <div class="inline-row">
+              <input id="profileWidth" type="range" min="0.2" max="8" step="0.1" />
+              <output id="profileWidthValue" for="profileWidth"></output>
+            </div>
           </label>
 
           <label>
             Axis Line Weight
-            <input id="axisWidth" type="number" min="0.2" max="6" step="0.1" />
+            <div class="inline-row">
+              <input id="axisWidth" type="range" min="0.2" max="6" step="0.1" />
+              <output id="axisWidthValue" for="axisWidth"></output>
+            </div>
           </label>
 
           <label>
@@ -108,6 +107,11 @@
           </label>
 
           <label class="inline-check">
+            <input id="showTriangles" type="checkbox" />
+            <span>Show Triangles</span>
+          </label>
+
+          <label class="inline-check">
             <input id="showProfiles" type="checkbox" checked />
             <span>Show Layer Profiles</span>
           </label>
@@ -118,8 +122,18 @@
           </label>
 
           <label class="inline-check">
-            <input id="showAnnotations" type="checkbox" checked />
+            <input id="showAnnotations" type="checkbox" />
             <span>Show Point Labels</span>
+          </label>
+
+          <label class="inline-check">
+            <input id="showGrowthArrows" type="checkbox" checked />
+            <span>Show Growth Arrows</span>
+          </label>
+
+          <label class="inline-check">
+            <input id="showGrowthValues" type="checkbox" />
+            <span>Show Growth Values</span>
           </label>
 
           <button id="resetView" type="button">Reset 3D Camera</button>
@@ -145,6 +159,6 @@
       </main>
     </div>
 
-    <script type="module" src="./src/main.js?v=20260321q"></script>
+    <script type="module" src="./src/main.js?v=20260324f"></script>
   </body>
 </html>
