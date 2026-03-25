@@ -1,23 +1,12 @@
 import * as THREE from "https://esm.sh/three@0.164.1";
 import { OrbitControls } from "https://esm.sh/three@0.164.1/examples/jsm/controls/OrbitControls.js";
-import { getScopeRange } from "./engine.js?v=20260324f";
-import { rgbToUnit, shadeRgb, tileTriangleColors, triangleColor } from "./tileColors.js?v=20260324f";
-
-const TRI_TYPE_COLORS = {
-  convergent: { r: 189, g: 84, b: 80 },
-  divergent: { r: 77, g: 136, b: 201 },
-  vertical: { r: 55, g: 152, b: 112 },
-  fan: { r: 142, g: 110, b: 192 },
-  generic: { r: 158, g: 149, b: 136 },
-};
+import { getScopeRange } from "./engine.js?v=20260325e";
+import { rgbToUnit, shadeRgb } from "./tileColors.js?v=20260325e";
 
 const DEFAULT_VISUAL = {
-  tileOpacity: 0.66,
-  tileEdgeWidth: 1.1,
   profileWidth: 2.2,
   axisWidth: 1,
   pointSize: 2.4,
-  showTriangles: false,
   showProfiles: true,
   showPointMarkers: true,
 };
@@ -29,12 +18,9 @@ function clamp(value, min, max) {
 function normalizeVisual(rawVisual) {
   const source = rawVisual ?? {};
   return {
-    tileOpacity: clamp(Number(source.tileOpacity) || DEFAULT_VISUAL.tileOpacity, 0.05, 1),
-    tileEdgeWidth: clamp(Number(source.tileEdgeWidth) || DEFAULT_VISUAL.tileEdgeWidth, 0.2, 6),
     profileWidth: clamp(Number(source.profileWidth) || DEFAULT_VISUAL.profileWidth, 0.2, 8),
     axisWidth: clamp(Number(source.axisWidth) || DEFAULT_VISUAL.axisWidth, 0.2, 6),
     pointSize: clamp(Number(source.pointSize) || DEFAULT_VISUAL.pointSize, 0.4, 10),
-    showTriangles: source.showTriangles !== false,
     showProfiles: source.showProfiles !== false,
     showPointMarkers: source.showPointMarkers !== false,
   };
@@ -64,14 +50,6 @@ function scopeMaxAngle(scope) {
 
 function normalizeAngle(angle) {
   return ((angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
-}
-
-function tileInScope(tile, scope) {
-  if (scope === "full") {
-    return true;
-  }
-  const vertices = [tile.a, tile.b, tile.c];
-  return vertices.every((point) => pointInScope(point, scope));
 }
 
 function pointInScope(point, scope) {
@@ -150,11 +128,6 @@ function segmentDisplayAxis(segment) {
   return segment.axis;
 }
 
-function pushTriangle(store, a, b, c, color) {
-  store.positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
-  store.colors.push(color.r, color.g, color.b, color.r, color.g, color.b, color.r, color.g, color.b);
-}
-
 export class Muqarnas3DView {
   constructor(root) {
     this.root = root;
@@ -219,116 +192,6 @@ export class Muqarnas3DView {
     }
   }
 
-  buildMeshFromTileLayers(model, scope, visual) {
-    const triangles = { positions: [], colors: [] };
-    const tileLayers = model.tileLayers ?? [];
-    const maxTileLayer = Math.max(1, tileLayers.length - 1);
-
-    for (const tileLayer of tileLayers) {
-      if (tileLayer.layer <= 0) {
-        continue;
-      }
-
-      const depth = tileLayer.layer / maxTileLayer;
-      const shade = 0.68 + 0.32 * depth;
-
-      for (const tile of tileLayer.triangles) {
-        if (!tileInScope(tile, scope)) {
-          continue;
-        }
-
-        const a = vector(tile.a);
-        const b = vector(tile.b);
-        const c = vector(tile.c);
-
-        const base = TRI_TYPE_COLORS[tile.kind] ?? triangleColor(model.axisColors, tile.a, tile.b, tile.c);
-        const color = rgbToUnit(shadeRgb(base, shade));
-        pushTriangle(triangles, a, b, c, color);
-      }
-    }
-
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute("position", new THREE.Float32BufferAttribute(triangles.positions, 3));
-    geometry.setAttribute("color", new THREE.Float32BufferAttribute(triangles.colors, 3));
-    geometry.computeVertexNormals();
-
-    const material = new THREE.MeshStandardMaterial({
-      vertexColors: true,
-      metalness: 0.08,
-      roughness: 0.7,
-      side: THREE.DoubleSide,
-      transparent: true,
-      opacity: visual.tileOpacity,
-    });
-
-    return new THREE.Mesh(geometry, material);
-  }
-
-  buildLegacyMesh(model, scope, connectionType, visual) {
-    const { indices, closed } = visibleIndices(scope);
-    const triangles = { positions: [], colors: [] };
-    const totalLayers = Math.max(1, model.layers.length - 1);
-
-    for (let layer = 1; layer < model.layers.length; layer += 1) {
-      const upper = model.layers[layer - 1].points;
-      const lower = model.layers[layer].points;
-      const depth = layer / totalLayers;
-      const shade = 0.72 + 0.28 * depth;
-
-      const segmentTotal = closed ? indices.length : indices.length - 1;
-      for (let s = 0; s < segmentTotal; s += 1) {
-        const i0 = indices[s];
-        const i1 = closed ? indices[(s + 1) % indices.length] : indices[s + 1];
-
-        const p00 = upper[i0];
-        const p01 = upper[i1];
-        const p10 = lower[i0];
-        const p11 = lower[i1];
-
-        const v00 = vector(p00);
-        const v01 = vector(p01);
-        const v10 = vector(p10);
-        const v11 = vector(p11);
-
-        const [triA, triB] = tileTriangleColors(model.axisColors, p00, p01, p10, p11, connectionType);
-        const triAColor = rgbToUnit(shadeRgb(triA, shade));
-        const triBColor = rgbToUnit(shadeRgb(triB, shade));
-
-        if (connectionType === "divergent") {
-          pushTriangle(triangles, v00, v10, v01, triAColor);
-          pushTriangle(triangles, v01, v10, v11, triBColor);
-        } else {
-          pushTriangle(triangles, v00, v10, v11, triAColor);
-          pushTriangle(triangles, v00, v11, v01, triBColor);
-        }
-      }
-    }
-
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute("position", new THREE.Float32BufferAttribute(triangles.positions, 3));
-    geometry.setAttribute("color", new THREE.Float32BufferAttribute(triangles.colors, 3));
-    geometry.computeVertexNormals();
-
-    const material = new THREE.MeshStandardMaterial({
-      vertexColors: true,
-      metalness: 0.08,
-      roughness: 0.7,
-      side: THREE.DoubleSide,
-      transparent: true,
-      opacity: visual.tileOpacity,
-    });
-
-    return new THREE.Mesh(geometry, material);
-  }
-
-  buildMesh(model, scope, connectionType, visual) {
-    const hasTileLayers = Array.isArray(model.tileLayers) && model.tileLayers.some((layer) => layer.triangles?.length > 0);
-    if (hasTileLayers) {
-      return this.buildMeshFromTileLayers(model, scope, visual);
-    }
-    return this.buildLegacyMesh(model, scope, connectionType, visual);
-  }
-
   buildAxisLines(model, scope, visual) {
     const group = new THREE.Group();
 
@@ -343,8 +206,9 @@ export class Muqarnas3DView {
         const color = model.axisColors[displayAxis] ?? "#5e5447";
         const material = new THREE.LineBasicMaterial({
           color,
-          opacity: 0.38,
+          opacity: 0.85,
           transparent: true,
+          depthTest: false,
           linewidth: visual.axisWidth,
         });
         group.add(new THREE.Line(geometry, material));
@@ -397,8 +261,9 @@ export class Muqarnas3DView {
       const geometry = new THREE.BufferGeometry().setFromPoints(linePoints);
       const material = new THREE.LineBasicMaterial({
         color: "#2d251d",
-        opacity: 0.18 + depth * 0.34,
+        opacity: 0.45 + depth * 0.35,
         transparent: true,
+        depthTest: false,
         linewidth: visual.profileWidth,
       });
       group.add(new THREE.Line(geometry, material));
@@ -467,20 +332,12 @@ export class Muqarnas3DView {
     this.grid.position.y = box.min.y - 0.8;
   }
 
-  setModel(model, scope, connectionType, autoFrame = false, rawVisual = {}) {
+  setModel(model, scope, autoFrame = false, rawVisual = {}) {
     const visual = normalizeVisual(rawVisual);
     this.disposeGroup();
 
     if (!model) {
       return;
-    }
-
-    const connection = connectionType === "divergent" ? "divergent" : "convergent";
-
-    let mesh = null;
-    if (visual.showTriangles) {
-      mesh = this.buildMesh(model, scope, connection, visual);
-      this.group.add(mesh);
     }
 
     const axes = this.buildAxisLines(model, scope, visual);
@@ -491,20 +348,6 @@ export class Muqarnas3DView {
 
     const markers = this.buildPointMarkers(model, scope, visual);
     this.group.add(markers);
-
-    if (mesh?.geometry) {
-      const wireframe = new THREE.WireframeGeometry(mesh.geometry);
-      const wire = new THREE.LineSegments(
-        wireframe,
-        new THREE.LineBasicMaterial({
-          color: "#2f2a25",
-          opacity: clamp(0.08 + visual.tileEdgeWidth * 0.06, 0.08, 0.55),
-          transparent: true,
-          linewidth: visual.tileEdgeWidth,
-        }),
-      );
-      this.group.add(wire);
-    }
 
     if (autoFrame) {
       this.fitView();

@@ -60,25 +60,7 @@
             <input id="ruleSecondary" type="text" />
           </label>
 
-          <label>
-            Connection Type
-            <select id="connectionType">
-              <option value="convergent">Convergent</option>
-              <option value="divergent">Divergent</option>
-            </select>
-          </label>
-
           <h3 class="group-title">Graphics</h3>
-
-          <label>
-            Tile Opacity
-            <input id="tileOpacity" type="number" min="0.05" max="1" step="0.05" />
-          </label>
-
-          <label>
-            Tile Edge Weight
-            <input id="tileEdgeWidth" type="number" min="0.2" max="6" step="0.1" />
-          </label>
 
           <label>
             Layer Line Weight
@@ -104,11 +86,6 @@
           <label>
             Annotation Size
             <input id="annotationSize" type="number" min="7" max="24" step="1" />
-          </label>
-
-          <label class="inline-check">
-            <input id="showTriangles" type="checkbox" />
-            <span>Show Triangles</span>
           </label>
 
           <label class="inline-check">
@@ -144,7 +121,7 @@
         <section class="panel">
           <header>
             <h2>Plan View</h2>
-            <p>Recursive plan propagation and tile topology.</p>
+            <p>Recursive plan propagation and growth axes.</p>
           </header>
           <canvas id="planCanvas"></canvas>
         </section>
@@ -152,13 +129,13 @@
         <section class="panel">
           <header>
             <h2>3D Muqarnas</h2>
-            <p>Layered recursive surfaces with convergent/divergent tiling.</p>
+            <p>Layered recursive growth skeleton.</p>
           </header>
           <div id="threeRoot"></div>
         </section>
       </main>
     </div>
 
-    <script type="module" src="./src/main.js?v=20260324f"></script>
+    <script type="module" src="./src/main.js?v=20260325e"></script>
   </body>
 </html>

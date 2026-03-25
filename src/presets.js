@@ -26,7 +26,6 @@ function basePreset() {
     layerHeight: 1,
     heightPattern: "1,1,1",
     ratioScale: 1,
-    triangulationStage: 1,
     ratios: silverRatioUnits(1),
     rules: {
       orthogonal: "b,c,b,0",
@@ -34,7 +33,6 @@ function basePreset() {
       secondary: "a,a,d",
     },
     collisionEpsilon: 0.05,
-    connectionType: "convergent",
   };
 }
 
@@ -45,7 +43,6 @@ export const HACI_KILIC_PRESET = {
     diagonal: "b,c",
     secondary: "a,a,d",
   },
-  connectionType: "convergent",
 };
 
 export const PRESETS = {

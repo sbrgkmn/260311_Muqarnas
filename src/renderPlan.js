@@ -1,14 +1,11 @@
-import { getScopeRange } from "./engine.js?v=20260324f";
-import { hexToRgb, rgbToStyle, shadeRgb, tileTriangleColors, triangleShapeColor } from "./tileColors.js?v=20260324f";
+import { getScopeRange } from "./engine.js?v=20260325e";
+import { hexToRgb, rgbToStyle, shadeRgb } from "./tileColors.js?v=20260325e";
 
 const DEFAULT_VISUAL = {
-  tileOpacity: 0.66,
-  tileEdgeWidth: 1.1,
   profileWidth: 2.2,
   axisWidth: 1,
   pointSize: 2.4,
   annotationSize: 10,
-  showTriangles: false,
   showProfiles: true,
   showPointMarkers: true,
   showAnnotations: false,
@@ -23,13 +20,10 @@ function clamp(value, min, max) {
 function normalizeVisual(rawVisual) {
   const source = rawVisual ?? {};
   return {
-    tileOpacity: clamp(Number(source.tileOpacity) || DEFAULT_VISUAL.tileOpacity, 0.05, 1),
-    tileEdgeWidth: clamp(Number(source.tileEdgeWidth) || DEFAULT_VISUAL.tileEdgeWidth, 0.2, 6),
     profileWidth: clamp(Number(source.profileWidth) || DEFAULT_VISUAL.profileWidth, 0.2, 8),
     axisWidth: clamp(Number(source.axisWidth) || DEFAULT_VISUAL.axisWidth, 0.2, 6),
     pointSize: clamp(Number(source.pointSize) || DEFAULT_VISUAL.pointSize, 0.4, 10),
     annotationSize: clamp(Number(source.annotationSize) || DEFAULT_VISUAL.annotationSize, 7, 24),
-    showTriangles: source.showTriangles !== false,
     showProfiles: source.showProfiles !== false,
     showPointMarkers: source.showPointMarkers !== false,
     showAnnotations: source.showAnnotations !== false,
@@ -84,13 +78,6 @@ function inScope(point, scope) {
   }
   const angle = normalizeAngle(Math.atan2(point.y, point.x));
   return angle <= scopeMaxAngle(scope) + eps;
-}
-
-function tileInScope(tile, scope) {
-  if (scope === "full") {
-    return true;
-  }
-  return inScope(tile.a, scope) && inScope(tile.b, scope) && inScope(tile.c, scope);
 }
 
 function segmentInScope(segment, scope) {
@@ -158,7 +145,7 @@ function drawAxisSegments(ctx, model, scope, toCanvas, visual, alpha = 0.32) {
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
     ctx.strokeStyle = rgbToStyle(color, alpha);
-    ctx.lineWidth = visual.axisWidth;
+    ctx.lineWidth = Math.max(1.1, visual.axisWidth * 1.2);
     ctx.stroke();
   }
   return true;
@@ -177,50 +164,17 @@ function sortPointsByAngle(points) {
   });
 }
 
-function getBoundsFromTiles(tileLayers, scope) {
-  let minX = Infinity;
-  let maxX = -Infinity;
-  let minY = Infinity;
-  let maxY = -Infinity;
-
-  for (const tileLayer of tileLayers) {
-    for (const tile of tileLayer.triangles) {
-      if (!tileInScope(tile, scope)) {
-        continue;
-      }
-      for (const vertex of [tile.a, tile.b, tile.c]) {
-        minX = Math.min(minX, vertex.x);
-        maxX = Math.max(maxX, vertex.x);
-        minY = Math.min(minY, vertex.y);
-        maxY = Math.max(maxY, vertex.y);
-      }
-    }
-  }
-
-  if (!Number.isFinite(minX)) {
-    minX = -1;
-    maxX = 1;
-    minY = -1;
-    maxY = 1;
-  }
-
-  minX = Math.min(minX, 0);
-  maxX = Math.max(maxX, 0);
-  minY = Math.min(minY, 0);
-  maxY = Math.max(maxY, 0);
-
-  return { minX, maxX, minY, maxY };
-}
-
-function getBoundsFromLayers(layers, indices) {
+function getBoundsFromLayers(layers, scope) {
   let minX = Infinity;
   let maxX = -Infinity;
   let minY = Infinity;
   let maxY = -Infinity;
 
   for (const layer of layers) {
-    for (const index of indices) {
-      const point = layer.points[index];
+    for (const point of (layer.points ?? [])) {
+      if (!point || !inScope(point, scope)) {
+        continue;
+      }
       minX = Math.min(minX, point.x);
       maxX = Math.max(maxX, point.x);
       minY = Math.min(minY, point.y);
@@ -236,106 +190,6 @@ function getBoundsFromLayers(layers, indices) {
   }
 
   return { minX, maxX, minY, maxY };
-}
-
-function drawTriangle(ctx, a, b, c, fillStyle, strokeStyle, width = 0.85) {
-  ctx.beginPath();
-  ctx.moveTo(a.x, a.y);
-  ctx.lineTo(b.x, b.y);
-  ctx.lineTo(c.x, c.y);
-  ctx.closePath();
-  ctx.fillStyle = fillStyle;
-  ctx.fill();
-  ctx.strokeStyle = strokeStyle;
-  ctx.lineWidth = width;
-  ctx.stroke();
-}
-
-function drawTiledPlan(ctx, model, scope, toCanvas, center, totalLayers, visual) {
-  const tileLayers = model.tileLayers ?? [];
-  const alpha = clamp(visual.tileOpacity * 0.9, 0.08, 1);
-
-  for (const tileLayer of tileLayers) {
-    if (tileLayer.layer <= 0) {
-      continue;
-    }
-
-    for (const tile of tileLayer.triangles) {
-      if (!tileInScope(tile, scope)) {
-        continue;
-      }
-
-      const a = toCanvas(tile.a);
-      const b = toCanvas(tile.b);
-      const c = toCanvas(tile.c);
-      const base = triangleShapeColor(tile.a, tile.b, tile.c);
-      const fill = rgbToStyle(base, alpha);
-      const edge = rgbToStyle(shadeRgb(base, 0.58), 0.78);
-
-      drawTriangle(ctx, a, b, c, fill, edge, visual.tileEdgeWidth);
-    }
-  }
-
-  drawAxisSegments(ctx, model, scope, toCanvas, visual, 0.32);
-}
-
-function drawLegacyPlan(ctx, model, scope, toCanvas, center, totalLayers, visual) {
-  const { closed } = getScopeRange(scope);
-  const indices = buildVisibleIndices(scope);
-  const connectionType = model.params?.connectionType === "divergent" ? "divergent" : "convergent";
-
-  for (let layerIndex = 1; layerIndex < model.layers.length; layerIndex += 1) {
-    const upper = model.layers[layerIndex - 1].points;
-    const lower = model.layers[layerIndex].points;
-    const depth = layerIndex / totalLayers;
-    const alpha = clamp((0.18 + 0.52 * depth) * visual.tileOpacity, 0.08, 1);
-    const shade = 0.72 + 0.28 * depth;
-    const edgeAlpha = 0.14 + 0.26 * depth;
-    const edge = rgbToStyle({ r: 58, g: 50, b: 43 }, edgeAlpha);
-
-    const segmentTotal = closed ? indices.length : indices.length - 1;
-    for (let s = 0; s < segmentTotal; s += 1) {
-      const i0 = indices[s];
-      const i1 = closed ? indices[(s + 1) % indices.length] : indices[s + 1];
-
-      const p00 = upper[i0];
-      const p01 = upper[i1];
-      const p10 = lower[i0];
-      const p11 = lower[i1];
-
-      const a = toCanvas(p00);
-      const b = toCanvas(p01);
-      const c = toCanvas(p10);
-      const d = toCanvas(p11);
-
-      const [triA, triB] = tileTriangleColors(model.axisColors, p00, p01, p10, p11, connectionType);
-      const triAStyle = rgbToStyle(shadeRgb(triA, shade), alpha);
-      const triBStyle = rgbToStyle(shadeRgb(triB, shade), alpha);
-
-      if (connectionType === "divergent") {
-        drawTriangle(ctx, a, c, b, triAStyle, edge, visual.tileEdgeWidth);
-        drawTriangle(ctx, b, c, d, triBStyle, edge, visual.tileEdgeWidth);
-      } else {
-        drawTriangle(ctx, a, c, d, triAStyle, edge, visual.tileEdgeWidth);
-        drawTriangle(ctx, a, d, b, triBStyle, edge, visual.tileEdgeWidth);
-      }
-    }
-  }
-
-  if (!drawAxisSegments(ctx, model, scope, toCanvas, visual, 0.38)) {
-    const finalLayer = model.layers[model.layers.length - 1];
-    for (const index of indices) {
-      const point = finalLayer.points[index];
-      const p = toCanvas(point);
-      const color = shadeRgb(hexToRgb(model.axisColors[point.axis]), 0.95);
-      ctx.beginPath();
-      ctx.moveTo(center.x, center.y);
-      ctx.lineTo(p.x, p.y);
-      ctx.strokeStyle = rgbToStyle(color, 0.38);
-      ctx.lineWidth = visual.axisWidth;
-      ctx.stroke();
-    }
-  }
 }
 
 function drawLayerProfiles(ctx, model, scope, toCanvas, visual) {
@@ -552,9 +406,8 @@ export function renderPlan(canvas, model, scope, rawVisual = {}, viewState = nul
     return;
   }
 
-  const hasTiles = Array.isArray(model.tileLayers) && model.tileLayers.some((layer) => layer.triangles?.length > 0);
   const indices = buildVisibleIndices(scope);
-  const bounds = hasTiles ? getBoundsFromTiles(model.tileLayers, scope) : getBoundsFromLayers(model.layers, indices);
+  const bounds = getBoundsFromLayers(model.layers, scope);
 
   const pad = 22;
   const spanX = Math.max(1e-6, bounds.maxX - bounds.minX);
@@ -583,9 +436,6 @@ export function renderPlan(canvas, model, scope, rawVisual = {}, viewState = nul
   };
 
   const center = toCanvas({ x: 0, y: 0 });
-  const totalLayers = Math.max(1, model.layers.length - 1);
-  const connectionType = model.params?.connectionType === "divergent" ? "divergent" : "convergent";
-
   ctx.fillStyle = "#fffdf8";
   ctx.fillRect(0, 0, cssWidth, cssHeight);
 
@@ -600,26 +450,21 @@ export function renderPlan(canvas, model, scope, rawVisual = {}, viewState = nul
     ctx.stroke();
   }
 
-  if (visual.showTriangles) {
-    if (hasTiles) {
-      drawTiledPlan(ctx, model, scope, toCanvas, center, totalLayers, visual);
-    } else {
-      drawLegacyPlan(ctx, model, scope, toCanvas, center, totalLayers, visual);
-    }
-  } else {
-    if (!drawAxisSegments(ctx, model, scope, toCanvas, visual, 0.38)) {
-      const finalLayer = model.layers[model.layers.length - 1];
-      for (const index of indices) {
-        const point = finalLayer.points[index];
-        const p = toCanvas(point);
-        const color = shadeRgb(hexToRgb(model.axisColors[point.axis]), 0.95);
-        ctx.beginPath();
-        ctx.moveTo(center.x, center.y);
-        ctx.lineTo(p.x, p.y);
-        ctx.strokeStyle = rgbToStyle(color, 0.38);
-        ctx.lineWidth = visual.axisWidth;
-        ctx.stroke();
+  if (!drawAxisSegments(ctx, model, scope, toCanvas, visual, 0.72)) {
+    const finalLayer = model.layers[model.layers.length - 1];
+    for (const index of indices) {
+      const point = finalLayer.points[index];
+      if (!point) {
+        continue;
       }
+      const p = toCanvas(point);
+      const color = shadeRgb(hexToRgb(model.axisColors[point.axis]), 0.95);
+      ctx.beginPath();
+      ctx.moveTo(center.x, center.y);
+      ctx.lineTo(p.x, p.y);
+      ctx.strokeStyle = rgbToStyle(color, 0.72);
+      ctx.lineWidth = Math.max(1.1, visual.axisWidth * 1.2);
+      ctx.stroke();
     }
   }
   drawLayerProfiles(ctx, model, scope, toCanvas, visual);
@@ -631,5 +476,5 @@ export function renderPlan(canvas, model, scope, rawVisual = {}, viewState = nul
   const visible = typeof model.visibleLayerCount === "number" ? model.visibleLayerCount : model.params.layers;
   ctx.fillText(`Layers: ${visible}/${model.params.layers}`, 12, 18);
   ctx.fillText(`Scope: ${scope}`, 12, 34);
-  ctx.fillText(`Tiles: ${connectionType}`, 12, 50);
+  ctx.fillText("Triangles: disabled", 12, 50);
 }
