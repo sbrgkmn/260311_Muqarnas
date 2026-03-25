@@ -1594,6 +1594,15 @@ function buildRecursiveBandTriangles(upper, lower, connectionType, options = {})
     for (let i = 0; i < indices.length - 1; i += 1) {
       add(upperOrdered[ui], lowerOrdered[indices[i]], lowerOrdered[indices[i + 1]], "fan", 5);
     }
+    if (closed) {
+      add(
+        upperOrdered[ui],
+        lowerOrdered[indices[indices.length - 1]],
+        lowerOrdered[indices[0]],
+        "fan",
+        5,
+      );
+    }
   }
 
   // Priority 2: symmetric parent-neighbor wedges.
@@ -1637,6 +1646,15 @@ function buildRecursiveBandTriangles(upper, lower, connectionType, options = {})
       }
       for (let i = 0; i < indices.length - 1; i += 1) {
         add(upperOrdered[ui], lowerOrdered[indices[i]], lowerOrdered[indices[i + 1]], kind, 4);
+      }
+      if (closed) {
+        add(
+          upperOrdered[ui],
+          lowerOrdered[indices[indices.length - 1]],
+          lowerOrdered[indices[0]],
+          kind,
+          4,
+        );
       }
     }
   }
@@ -1690,6 +1708,109 @@ function buildRecursiveBandTriangles(upper, lower, connectionType, options = {})
   const seen = new Set();
   for (const candidate of candidates) {
     appendTriangleNoCross(triangles, seen, candidate, candidate._priority ?? 1);
+  }
+
+  // Coverage guard:
+  // ensure every lower-ring point contributes to at least one triangle,
+  // then patch missing axis wedges without disturbing the growth graph.
+  const lowerIndexByKey = new Map();
+  for (let li = 0; li < lowerOrdered.length; li += 1) {
+    lowerIndexByKey.set(vertexKey(lowerOrdered[li]), li);
+  }
+
+  const computeLowerUsage = () => {
+    const usage = new Array(lowerOrdered.length).fill(0);
+    for (const tri of triangles) {
+      for (const vertex of [tri.a, tri.b, tri.c]) {
+        const li = lowerIndexByKey.get(vertexKey(vertex));
+        if (li !== undefined) {
+          usage[li] += 1;
+        }
+      }
+    }
+    return usage;
+  };
+
+  const addCoverage = (a, b, c, priority = 5) => {
+    const tri = makeTriangleFromVertices(a, b, c, kind);
+    if (!tri || !isValidBandTriangle(tri)) {
+      return;
+    }
+    appendTriangleNoCross(triangles, seen, tri, priority);
+  };
+
+  let usage = computeLowerUsage();
+  for (let li = 0; li < lowerOrdered.length; li += 1) {
+    const ui = parentIndex[li];
+    const parentAxis = resolveAxis(upperOrdered[ui]);
+    const targetUsage = parentAxis === AXIS.DIAGONAL ? 2 : 1;
+    if (usage[li] >= targetUsage) {
+      continue;
+    }
+
+    const prevLower = prevIndex(li, lowerOrdered.length);
+    const nextLower = nextIndex(li, lowerOrdered.length);
+    if (prevLower !== null) {
+      addCoverage(upperOrdered[ui], lowerOrdered[prevLower], lowerOrdered[li], 5);
+    }
+    if (nextLower !== null) {
+      addCoverage(upperOrdered[ui], lowerOrdered[li], lowerOrdered[nextLower], 5);
+    }
+
+    if (parentAxis === AXIS.DIAGONAL) {
+      const prevUpper = prevIndex(ui, upperOrdered.length);
+      const nextUpper = nextIndex(ui, upperOrdered.length);
+      if (prevUpper !== null) {
+        addCoverage(upperOrdered[prevUpper], upperOrdered[ui], lowerOrdered[li], 6);
+      }
+      if (nextUpper !== null) {
+        addCoverage(upperOrdered[ui], upperOrdered[nextUpper], lowerOrdered[li], 6);
+      }
+    }
+
+    usage = computeLowerUsage();
+  }
+
+  const computeWedgeUsage = () => {
+    const wedgeUsage = new Array(lowerOrdered.length).fill(0);
+    for (const tri of triangles) {
+      const triVertices = [tri.a, tri.b, tri.c];
+      const upperCount = triVertices.reduce((count, vertex) => (
+        count + (upperOrdered.some((u) => vertexKey(u) === vertexKey(vertex)) ? 1 : 0)
+      ), 0);
+      if (upperCount < 2) {
+        continue;
+      }
+      for (const vertex of triVertices) {
+        const li = lowerIndexByKey.get(vertexKey(vertex));
+        if (li !== undefined) {
+          wedgeUsage[li] += 1;
+        }
+      }
+    }
+    return wedgeUsage;
+  };
+
+  let wedgeUsage = computeWedgeUsage();
+  for (let li = 0; li < lowerOrdered.length; li += 1) {
+    const ui = parentIndex[li];
+    const parentAxis = resolveAxis(upperOrdered[ui]);
+    const needsAxisWedge = wedgeUsage[li] < 1 && (usage[li] === 0 || parentAxis === AXIS.ORTHOGONAL || parentAxis === AXIS.DIAGONAL);
+    if (!needsAxisWedge) {
+      continue;
+    }
+
+    const prevUpper = prevIndex(ui, upperOrdered.length);
+    const nextUpper = nextIndex(ui, upperOrdered.length);
+    if (prevUpper !== null) {
+      addCoverage(upperOrdered[prevUpper], upperOrdered[ui], lowerOrdered[li], 6);
+    }
+    if (nextUpper !== null) {
+      addCoverage(upperOrdered[ui], upperOrdered[nextUpper], lowerOrdered[li], 6);
+    }
+
+    usage = computeLowerUsage();
+    wedgeUsage = computeWedgeUsage();
   }
 
   return triangles.map((tri) => ({
