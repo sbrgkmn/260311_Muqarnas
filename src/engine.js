@@ -1,4 +1,4 @@
-import { BASE_ANGLE_DEG, BRANCH_COUNT, silverRatioUnits } from "./presets.js?v=20260325e";
+import { BASE_ANGLE_DEG, BRANCH_COUNT, silverRatioUnits } from "./presets.js?v=20260501b";
 
 const AXIS = {
   ORTHOGONAL: "orthogonal",
@@ -6,8 +6,9 @@ const AXIS = {
   SECONDARY: "secondary",
 };
 
-const VALID_TOKEN = /^[aAbBcCdDxX0vV]$/;
+const VALID_TOKEN = /^[aAbBcCdDeEfFgGxX0vV]$/;
 const EPS = 1e-6;
+const TAU = Math.PI * 2;
 
 export const AXIS_COLORS = {
   [AXIS.ORTHOGONAL]: "#d62828",
@@ -331,6 +332,60 @@ function parseRules(rawRules) {
   };
 }
 
+function parseRulePhases(rawPhases, fallbackRules) {
+  if (!Array.isArray(rawPhases) || rawPhases.length === 0) {
+    return [{
+      name: "Default",
+      fromLayer: 1,
+      toLayer: Infinity,
+      rules: fallbackRules,
+    }];
+  }
+
+  const phases = rawPhases
+    .map((phase, index) => {
+      const rules = parseRules(phase?.rules ?? fallbackRules);
+      const fromLayer = Math.max(1, Math.round(Number(phase?.fromLayer) || 1));
+      const rawToLayer = Number(phase?.toLayer);
+      const toLayer = Number.isFinite(rawToLayer) ? Math.max(fromLayer, Math.round(rawToLayer)) : Infinity;
+      return {
+        name: phase?.name ?? `Rule ${index + 1}`,
+        fromLayer,
+        toLayer,
+        rules,
+      };
+    })
+    .sort((a, b) => a.fromLayer - b.fromLayer);
+
+  return phases.length > 0 ? phases : [{
+    name: "Default",
+    fromLayer: 1,
+    toLayer: Infinity,
+    rules: fallbackRules,
+  }];
+}
+
+function rulesForLayer(rulePhases, layerNumber) {
+  let active = rulePhases[0]?.rules;
+  for (const phase of rulePhases) {
+    if (layerNumber >= phase.fromLayer && layerNumber <= phase.toLayer) {
+      active = phase.rules;
+    }
+  }
+  return active ?? parseRules(null);
+}
+
+function normalizeBranchAngles(rawAngles) {
+  const out = {};
+  for (const axis of [AXIS.ORTHOGONAL, AXIS.DIAGONAL, AXIS.SECONDARY]) {
+    const value = Number(rawAngles?.[axis]);
+    if (Number.isFinite(value) && value > 0) {
+      out[axis] = clamp(value, BASE_ANGLE_DEG, 360);
+    }
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
 function parseHeightPattern(raw) {
   const values = Array.isArray(raw)
     ? raw
@@ -530,7 +585,7 @@ class GrowthPoint {
     return angleBetween(v2, v1);
   }
 
-  branch(diagonalRule, secondaryRule, units, orthogonalRule = []) {
+  branch(diagonalRule, secondaryRule, units, orthogonalRule = [], branchAngles = null, branchOptions = null) {
     const diagonalFirst = diagonalRule[0] ?? "b";
     const secondaryFirst = secondaryRule[0] ?? "a";
 
@@ -588,7 +643,8 @@ class GrowthPoint {
       return out;
     }
 
-    const angle = this.getAngle(secondaryRule, units);
+    const forcedAngle = branchAngles?.[axisKey(this)];
+    const angle = Number.isFinite(forcedAngle) ? forcedAngle : this.getAngle(secondaryRule, units);
     let dir = rotate(this.v, -(angle / 45) * BASE_ANGLE_DEG);
     const baseCount = this.pp && this.axis
       ? angle / BASE_ANGLE_DEG
@@ -656,6 +712,13 @@ class GrowthPoint {
       if ((i === 0 || i === count - 1) && (count - 1) % 4 === 0) {
         child.growing = false;
       }
+      if (branchOptions?.continueCenterOnly) {
+        const centerIndex = Math.floor((count - 1) / 2);
+        child.growing = i === centerIndex;
+      }
+      if (branchOptions?.stopSecondaryBranches && !child.m) {
+        child.growing = false;
+      }
 
       out.push(child);
       dir = rotate(move, BASE_ANGLE_DEG);
@@ -671,6 +734,10 @@ class GrowthPoint {
       secondary,
       heightValue,
       units,
+      branchAngles,
+      stopSecondaryOnVertical,
+      stopSecondaryBranches,
+      continueCenterBranchesOnly,
     } = context;
 
     if (this.m) {
@@ -678,7 +745,10 @@ class GrowthPoint {
         const nextIndex = (this.index + 1) % orthogonal.length;
         const token = orthogonal[nextIndex];
         if (nextIndex === 0 || isBranchToken(token)) {
-          return this.branch(diagonal, secondary, units, orthogonal);
+          return this.branch(diagonal, secondary, units, orthogonal, branchAngles, {
+            continueCenterOnly: continueCenterBranchesOnly,
+            stopSecondaryBranches,
+          });
         }
         if (heightValue === 0) {
           return this.advance(token, nextIndex, secondary.length, units);
@@ -689,7 +759,10 @@ class GrowthPoint {
       const nextIndex = (this.index + 1) % diagonal.length;
       const token = diagonal[nextIndex];
       if (g % diagonal.length === 0 || isBranchToken(token)) {
-        return this.branch(diagonal, secondary, units, orthogonal);
+        return this.branch(diagonal, secondary, units, orthogonal, branchAngles, {
+          continueCenterOnly: continueCenterBranchesOnly,
+          stopSecondaryBranches,
+        });
       }
       if (heightValue === 0) {
         return this.advance(token, nextIndex, secondary.length, units);
@@ -700,15 +773,16 @@ class GrowthPoint {
     const nextIndex = (this.index + 1) % secondary.length;
     const token = secondary[nextIndex];
     const grown = this.growLinear(token, this.axis, this.m, nextIndex, units);
+    if (stopSecondaryOnVertical && Math.abs(convertToken(token, units)) < EPS) {
+      grown.growing = false;
+      return grown;
+    }
     if ((g % diagonal.length) % secondary.length === 0) {
       grown.growing = false;
     }
     return grown;
   }
 }
-
-// Triangulation pipeline removed intentionally.
-// We will rebuild triangle generation from scratch in a dedicated pass.
 
 function moveVertical(points, amount) {
   for (const p of points) {
@@ -758,6 +832,194 @@ function buildUnits(rawParams) {
   return units;
 }
 
+function normalizeAngleRad(angle) {
+  return ((angle % TAU) + TAU) % TAU;
+}
+
+function cloneDisplayPoint(point) {
+  return {
+    x: point.x,
+    y: point.y,
+    z: point.z,
+    axis: point.axis ?? AXIS.ORTHOGONAL,
+    pid: point.pid ?? null,
+    parentId: point.parentId ?? null,
+    pp: !!point.pp,
+    c: !!point.c,
+    token: point.token ?? null,
+    amount: Number.isFinite(point.amount) ? point.amount : 0,
+    stepType: point.stepType ?? null,
+  };
+}
+
+function triangleArea3D(a, b, c) {
+  const ab = { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z };
+  const ac = { x: c.x - a.x, y: c.y - a.y, z: c.z - a.z };
+  const cross = {
+    x: ab.y * ac.z - ab.z * ac.y,
+    y: ab.z * ac.x - ab.x * ac.z,
+    z: ab.x * ac.y - ab.y * ac.x,
+  };
+  return Math.hypot(cross.x, cross.y, cross.z) * 0.5;
+}
+
+function sameDisplayPoint(a, b) {
+  return !!a && !!b && dist(a, b) < 1e-7;
+}
+
+function cleanFaceVertices(vertices) {
+  const out = [];
+  for (const vertex of vertices) {
+    if (!vertex) {
+      continue;
+    }
+    if (!out.length || !sameDisplayPoint(out[out.length - 1], vertex)) {
+      out.push(vertex);
+    }
+  }
+  if (out.length > 1 && sameDisplayPoint(out[0], out[out.length - 1])) {
+    out.pop();
+  }
+  return out;
+}
+
+function makeFace(vertices, layer, connectionType) {
+  const clean = cleanFaceVertices(vertices);
+  if (clean.length < 3) {
+    return null;
+  }
+
+  if (clean.length === 3 && triangleArea3D(clean[0], clean[1], clean[2]) < 1e-7) {
+    return null;
+  }
+
+  if (clean.length === 4) {
+    const area = triangleArea3D(clean[0], clean[1], clean[2]) + triangleArea3D(clean[0], clean[2], clean[3]);
+    if (area < 1e-7) {
+      return null;
+    }
+  }
+
+  return {
+    layer,
+    connectionType,
+    vertices: clean.map((point) => cloneDisplayPoint(point)),
+  };
+}
+
+function sortContourForMeshing(points) {
+  return [...points].sort((a, b) => {
+    const aa = normalizeAngleRad(Math.atan2(a.y, a.x));
+    const bb = normalizeAngleRad(Math.atan2(b.y, b.x));
+    if (Math.abs(aa - bb) > EPS) {
+      return aa - bb;
+    }
+    return pointRadius(a) - pointRadius(b);
+  });
+}
+
+function contourAngles(points) {
+  return points.map((point) => normalizeAngleRad(Math.atan2(point.y, point.x)));
+}
+
+function unwrapAngles(angles) {
+  if (!angles.length) {
+    return [];
+  }
+  const out = [angles[0]];
+  for (let i = 1; i < angles.length; i += 1) {
+    let angle = angles[i];
+    while (angle <= out[i - 1] + EPS) {
+      angle += TAU;
+    }
+    out.push(angle);
+  }
+  out.push(out[0] + TAU);
+  return out;
+}
+
+function buildFanFaces(center, ring, layer, connectionType) {
+  const faces = [];
+  if (!center || ring.length < 2) {
+    return faces;
+  }
+  for (let i = 0; i < ring.length; i += 1) {
+    const face = makeFace([center, ring[i], ring[(i + 1) % ring.length]], layer, connectionType);
+    if (face) {
+      faces.push(face);
+    }
+  }
+  return faces;
+}
+
+function buildBandFaces(innerPoints, outerPoints, layer, connectionType) {
+  const faces = [];
+  const inner = sortContourForMeshing(extractContourPoints(innerPoints));
+  const outer = sortContourForMeshing(extractContourPoints(outerPoints));
+  if (!inner.length || outer.length < 2) {
+    return faces;
+  }
+
+  if (inner.length === 1) {
+    return buildFanFaces(inner[0], outer, layer, connectionType);
+  }
+  if (outer.length === 1) {
+    return buildFanFaces(outer[0], inner, layer, connectionType);
+  }
+
+  const innerAngles = unwrapAngles(contourAngles(inner));
+  const outerAngles = unwrapAngles(contourAngles(outer));
+  const angleTol = 1e-5;
+  let i = 0;
+  let j = 0;
+
+  while (i < inner.length || j < outer.length) {
+    const innerCurrent = inner[i % inner.length];
+    const innerNext = inner[(i + 1) % inner.length];
+    const outerCurrent = outer[j % outer.length];
+    const outerNext = outer[(j + 1) % outer.length];
+    const nextInnerAngle = i < inner.length ? innerAngles[i + 1] : Infinity;
+    const nextOuterAngle = j < outer.length ? outerAngles[j + 1] : Infinity;
+
+    let face = null;
+    if (Math.abs(nextInnerAngle - nextOuterAngle) <= angleTol) {
+      face = makeFace([innerCurrent, outerCurrent, outerNext, innerNext], layer, connectionType);
+      i += 1;
+      j += 1;
+    } else if (nextInnerAngle < nextOuterAngle) {
+      face = makeFace([innerCurrent, outerCurrent, innerNext], layer, connectionType);
+      i += 1;
+    } else {
+      face = makeFace([innerCurrent, outerCurrent, outerNext], layer, connectionType);
+      j += 1;
+    }
+
+    if (face) {
+      faces.push(face);
+    }
+  }
+
+  return faces;
+}
+
+function buildDisplayTileLayers(layers, params) {
+  const connectionType = params.connectionType === "divergent" ? "divergent" : "convergent";
+  const tileLayers = [{ layer: 0, faces: [], connectionType }];
+
+  for (let layer = 1; layer < layers.length; layer += 1) {
+    const inner = layers[layer - 1]?.points ?? [];
+    const outer = layers[layer]?.points ?? [];
+    tileLayers.push({
+      layer,
+      z: layers[layer]?.z ?? 0,
+      connectionType,
+      faces: buildBandFaces(inner, outer, layer, connectionType),
+    });
+  }
+
+  return tileLayers;
+}
+
 export function getScopeRange(scope) {
   // Rebuild mode: always operate as full dome.
   return { segmentCount: 16, closed: true };
@@ -774,10 +1036,17 @@ export function generateMuqarnas(rawParams) {
     heightPattern: rawParams.heightPattern || "1,1,1",
     ratioScale: clamp(Number(rawParams.ratioScale) || 1, 0.05, 10),
     collisionEpsilon: clamp(Number(rawParams.collisionEpsilon) || 0.05, 0.005, 1),
+    convergenceEpsilon: clamp(Number(rawParams.convergenceEpsilon) || 0, 0, 1),
+    branchAngles: normalizeBranchAngles(rawParams.branchAngles),
+    stopSecondaryOnVertical: rawParams.stopSecondaryOnVertical === true,
+    stopSecondaryBranches: rawParams.stopSecondaryBranches === true,
+    continueCenterBranchesOnly: rawParams.continueCenterBranchesOnly === true,
+    connectionType: rawParams.connectionType === "divergent" ? "divergent" : "convergent",
   };
 
   const units = buildUnits(params);
   const rules = parseRules(params.rules);
+  const rulePhases = parseRulePhases(params.rulePhases, rules);
   const heights = parseHeightPattern(params.heightPattern);
 
   const root = new GrowthPoint({
@@ -797,11 +1066,13 @@ export function generateMuqarnas(rawParams) {
 
   for (let g = 0; g < params.layers; g += 1) {
     const next = [];
+    const layerNumber = g + 1;
+    const activeRules = rulesForLayer(rulePhases, layerNumber);
     const heightValue = heights[g % heights.length];
 
     if (g === 0) {
       for (let i = 0; i < BRANCH_COUNT; i += 1) {
-        const token = i % 2 === 0 ? rules.diagonal[0] : rules.secondary[0];
+        const token = i % 2 === 0 ? activeRules.diagonal[0] : activeRules.secondary[0];
         next.push(root.growRotate(i * BASE_ANGLE_DEG, token, i % 4 === 0, i % 2 === 0, 0, units));
       }
     } else {
@@ -810,11 +1081,15 @@ export function generateMuqarnas(rawParams) {
           continue;
         }
         const grown = p.checkGrowth(g, {
-          orthogonal: rules.orthogonal,
-          diagonal: rules.diagonal,
-          secondary: rules.secondary,
+          orthogonal: activeRules.orthogonal,
+          diagonal: activeRules.diagonal,
+          secondary: activeRules.secondary,
           heightValue,
           units,
+          branchAngles: params.branchAngles,
+          stopSecondaryOnVertical: params.stopSecondaryOnVertical,
+          stopSecondaryBranches: params.stopSecondaryBranches,
+          continueCenterBranchesOnly: params.continueCenterBranchesOnly,
         });
 
         if (Array.isArray(grown)) {
@@ -827,7 +1102,10 @@ export function generateMuqarnas(rawParams) {
 
     moveVertical(next, -heightValue * params.layerHeight);
     enforceOutwardMonotonic(next);
-    const checked = checkCollisions(next, params.collisionEpsilon);
+    let checked = checkCollisions(next, params.collisionEpsilon);
+    if (params.convergenceEpsilon > 0) {
+      checked = checkCollisions(mergeNearPoints(checked, params.convergenceEpsilon), params.collisionEpsilon);
+    }
 
     for (const p of checked) {
       if (!p.parent) {
@@ -850,15 +1128,18 @@ export function generateMuqarnas(rawParams) {
     }
   }
 
+  const displayTileLayers = buildDisplayTileLayers(layers, params);
   const model = {
     params: {
       ...params,
       rules,
+      rulePhases,
       ratios: units,
       heights,
     },
     layers,
     tileLayers: [],
+    displayTileLayers,
     axisSegments,
     axisColors: AXIS_COLORS,
     axisKeys: AXIS,

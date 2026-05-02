@@ -1,11 +1,12 @@
-import { getScopeRange } from "./engine.js?v=20260325e";
-import { hexToRgb, rgbToStyle, shadeRgb } from "./tileColors.js?v=20260325e";
+import { getScopeRange } from "./engine.js?v=20260501b";
+import { hexToRgb, rgbToStyle, shadeRgb } from "./tileColors.js?v=20260501b";
 
 const DEFAULT_VISUAL = {
   profileWidth: 2.2,
   axisWidth: 1,
   pointSize: 2.4,
   annotationSize: 10,
+  showTiles: true,
   showProfiles: true,
   showPointMarkers: true,
   showAnnotations: false,
@@ -24,6 +25,7 @@ function normalizeVisual(rawVisual) {
     axisWidth: clamp(Number(source.axisWidth) || DEFAULT_VISUAL.axisWidth, 0.2, 6),
     pointSize: clamp(Number(source.pointSize) || DEFAULT_VISUAL.pointSize, 0.4, 10),
     annotationSize: clamp(Number(source.annotationSize) || DEFAULT_VISUAL.annotationSize, 7, 24),
+    showTiles: source.showTiles !== false,
     showProfiles: source.showProfiles !== false,
     showPointMarkers: source.showPointMarkers !== false,
     showAnnotations: source.showAnnotations !== false,
@@ -224,6 +226,60 @@ function drawLayerProfiles(ctx, model, scope, toCanvas, visual) {
     ctx.strokeStyle = rgbToStyle({ r: 38, g: 33, b: 27 }, 0.18 + depth * 0.34);
     ctx.lineWidth = visual.profileWidth * (0.78 + depth * 0.55);
     ctx.stroke();
+  }
+}
+
+function faceInScope(face, scope) {
+  return (face.vertices ?? []).some((point) => inScope(point, scope));
+}
+
+function tileColorForLayer(layer, total) {
+  const t = total <= 1 ? 0 : layer / total;
+  const warm = { r: 212, g: 177, b: 132 };
+  const cool = { r: 116, g: 154, b: 158 };
+  return {
+    r: Math.round(warm.r + (cool.r - warm.r) * t),
+    g: Math.round(warm.g + (cool.g - warm.g) * t),
+    b: Math.round(warm.b + (cool.b - warm.b) * t),
+  };
+}
+
+function drawTileFaces(ctx, model, scope, toCanvas, visual) {
+  const tileLayers = model.displayTileLayers ?? model.tileLayers;
+  if (!visual.showTiles || !Array.isArray(tileLayers)) {
+    return;
+  }
+
+  const total = Math.max(1, tileLayers.length - 1);
+  for (const tileLayer of tileLayers) {
+    const layer = tileLayer.layer ?? 0;
+    const faces = tileLayer.faces ?? tileLayer.triangles ?? [];
+    if (!faces.length) {
+      continue;
+    }
+
+    const base = tileColorForLayer(layer, total);
+    const fill = rgbToStyle(base, 0.42);
+    const stroke = rgbToStyle(shadeRgb(base, 0.68), 0.34);
+    for (const face of faces) {
+      const vertices = face.vertices ?? [face.a, face.b, face.c].filter(Boolean);
+      if (vertices.length < 3 || !faceInScope({ vertices }, scope)) {
+        continue;
+      }
+      const first = toCanvas(vertices[0]);
+      ctx.beginPath();
+      ctx.moveTo(first.x, first.y);
+      for (let i = 1; i < vertices.length; i += 1) {
+        const p = toCanvas(vertices[i]);
+        ctx.lineTo(p.x, p.y);
+      }
+      ctx.closePath();
+      ctx.fillStyle = fill;
+      ctx.fill();
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = 0.65;
+      ctx.stroke();
+    }
   }
 }
 
@@ -450,6 +506,7 @@ export function renderPlan(canvas, model, scope, rawVisual = {}, viewState = nul
     ctx.stroke();
   }
 
+  drawTileFaces(ctx, model, scope, toCanvas, visual);
   if (!drawAxisSegments(ctx, model, scope, toCanvas, visual, 0.72)) {
     const finalLayer = model.layers[model.layers.length - 1];
     for (const index of indices) {
@@ -471,10 +528,28 @@ export function renderPlan(canvas, model, scope, rawVisual = {}, viewState = nul
   drawGrowthDebug(ctx, model, scope, toCanvas, visual);
   drawPointAnnotations(ctx, model, scope, toCanvas, visual);
 
-  ctx.fillStyle = "#5f6a6b";
   ctx.font = '12px "IBM Plex Sans", sans-serif';
   const visible = typeof model.visibleLayerCount === "number" ? model.visibleLayerCount : model.params.layers;
+  const displayTileLayers = model.displayTileLayers ?? model.tileLayers ?? [];
+  const faceStats = displayTileLayers.reduce((stats, layer) => {
+    const faces = layer.faces ?? layer.triangles ?? [];
+    for (const face of faces) {
+      const count = (face.vertices ?? [face.a, face.b, face.c].filter(Boolean)).length;
+      if (count === 4) {
+        stats.quads += 1;
+      } else if (count === 3) {
+        stats.triangles += 1;
+      }
+    }
+    return stats;
+  }, { quads: 0, triangles: 0 });
+  const faceCount = faceStats.quads + faceStats.triangles;
+  ctx.fillStyle = rgbToStyle({ r: 255, g: 253, b: 248 }, 0.86);
+  ctx.fillRect(8, 8, 148, 50);
+  ctx.strokeStyle = rgbToStyle({ r: 207, g: 214, b: 210 }, 0.8);
+  ctx.strokeRect(8, 8, 148, 50);
+  ctx.fillStyle = "#5f6a6b";
   ctx.fillText(`Layers: ${visible}/${model.params.layers}`, 12, 18);
-  ctx.fillText(`Scope: ${scope}`, 12, 34);
-  ctx.fillText("Triangles: disabled", 12, 50);
+  ctx.fillText(`Type: ${model.params.connectionType}`, 12, 34);
+  ctx.fillText(`Faces: ${faceCount} (${faceStats.quads}Q/${faceStats.triangles}T)`, 12, 50);
 }

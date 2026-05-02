@@ -1,19 +1,24 @@
 # 260311_Muqarnas
 
-Browser-based recursive muqarnas generator aligned with the article/reference implementation in `article/`, using three interacting recursive growth patterns (orthogonal, diagonal, secondary), a 22.5° branching clock, collision-aware convergence, and layer-wise triangulated topology.
+Browser-based recursive muqarnas generator aligned with the Seljuk muqarnas paper, using three interacting recursive growth patterns (orthogonal, diagonal, secondary), a 22.5° branching clock, collision-aware convergence, and simplified 2D/3D tile-surface visualization.
 
 ## Features
 
+- Four paper case-study presets:
+  - Haci Kilic Mosque
+  - Sifaiye Madrasah
+  - Cifte Minareli Madrasah
+  - Gevher Nesibe Madrasah
 - Three recursive axis patterns:
   - Orthogonal rule sequence
   - Diagonal rule sequence
   - Secondary rule sequence with periodic convergence behavior
+- Layer-specific rule phases for the case studies that switch growth syntax partway through the model.
 - 22.5° octagonal branch clock with local angle-based fan branching.
-- Fixed silver-ratio unit family with optional global scale (`a,b,c,d,x` where `x=a+d`).
+- Fixed silver-ratio unit family with optional global scale (`a,b,c,d,e,f,g,x` where `x=a+d`).
 - Collision/convergence checks during layer propagation.
-- Convergent/divergent triangle connection style switch.
-- Single default configuration focused on `Haci Kilic`.
-- Plan + 3D synchronized visualization.
+- Convergent/divergent diagonal style for internal quad triangulation.
+- Plan + 3D synchronized visualization with minimal triangle/quad face bands, layer profiles, and growth axes.
 
 ## Getting Started
 
@@ -28,19 +33,14 @@ python -m http.server 8080
 
 ## Controls
 
-- `Dome Scope`: fixed to `Full Dome (360°)` in the rebuild.
-- `Layers`: recursion depth (default `3` for early-layer debugging).
+- `Case Study`: switches between the four muqarnas structures discussed in the paper.
+- `Layers`: recursion depth for the selected case study.
 - `Layer Height Scale`: vertical displacement multiplier.
-- `Height Pattern`: repeating per-layer height sequence (`example: 1,1,1`).
 - `Global Ratio Scale`: scales silver-ratio growth units.
-- `Collision Epsilon`: proximity threshold used in convergence/collision checks.
-- `Orthogonal Rule`, `Diagonal Rule`, `Secondary Rule`: recursive syntax tokens (`a,b,c,d,x,0,v`; uppercase token can be used as branch marker).
-- `Connection Type`: `Convergent` or `Divergent` topology stitching.
-- `Axis Line Weight` and `Layer Line Weight`: sliders for axis/profile line thickness (with live value readouts).
-- `Show Growth Arrows`: overlays parent-to-child growth directions in plan.
-- `Show Growth Values`: labels each growth arrow with the applied token/value (`token:amount`).
-- Default visual deployment: `Show Triangles`, `Show Point Labels`, and `Show Growth Values` start off.
+- `Tile Diagonal`: `Convergent` or `Divergent` internal diagonal for four-sided display faces.
+- Display toggles: tile surfaces, layer profiles, growth axes, point markers, and point labels.
 - Plan interaction: mouse wheel zoom, left-drag pan, double-click reset.
+- `Recursive rules`: shows the active orthogonal, diagonal, and secondary syntax schedules for the selected case study.
 
 ## Reference
 

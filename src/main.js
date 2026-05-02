@@ -1,29 +1,28 @@
-import { generateMuqarnas } from "./engine.js?v=20260325e";
-import { clonePreset, silverRatioUnits } from "./presets.js?v=20260325e";
-import { renderPlan } from "./renderPlan.js?v=20260325e";
-import { Muqarnas3DView } from "./render3d.js?v=20260325e";
+import { generateMuqarnas } from "./engine.js?v=20260501b";
+import { clonePreset, PRESET_ORDER, PRESETS, silverRatioUnits } from "./presets.js?v=20260501b";
+import { renderPlan } from "./renderPlan.js?v=20260501b";
+import { Muqarnas3DView } from "./render3d.js?v=20260501b";
 
 const dom = {
-  scope: document.getElementById("scope"),
+  presetSelect: document.getElementById("presetSelect"),
+  presetName: document.getElementById("presetName"),
+  presetLocation: document.getElementById("presetLocation"),
+  presetCadence: document.getElementById("presetCadence"),
+  presetFigure: document.getElementById("presetFigure"),
+  presetDescription: document.getElementById("presetDescription"),
   layers: document.getElementById("layers"),
+  layersValue: document.getElementById("layersValue"),
   layerHeight: document.getElementById("layerHeight"),
-  heightPattern: document.getElementById("heightPattern"),
+  layerHeightValue: document.getElementById("layerHeightValue"),
   ratioScale: document.getElementById("ratioScale"),
-  collisionEpsilon: document.getElementById("collisionEpsilon"),
-  ruleOrthogonal: document.getElementById("ruleOrthogonal"),
-  ruleDiagonal: document.getElementById("ruleDiagonal"),
-  ruleSecondary: document.getElementById("ruleSecondary"),
-  profileWidth: document.getElementById("profileWidth"),
-  axisWidth: document.getElementById("axisWidth"),
-  profileWidthValue: document.getElementById("profileWidthValue"),
-  axisWidthValue: document.getElementById("axisWidthValue"),
-  pointSize: document.getElementById("pointSize"),
-  annotationSize: document.getElementById("annotationSize"),
+  ratioScaleValue: document.getElementById("ratioScaleValue"),
+  connectionType: document.getElementById("connectionType"),
+  showTiles: document.getElementById("showTiles"),
   showProfiles: document.getElementById("showProfiles"),
   showPointMarkers: document.getElementById("showPointMarkers"),
   showAnnotations: document.getElementById("showAnnotations"),
   showGrowthArrows: document.getElementById("showGrowthArrows"),
-  showGrowthValues: document.getElementById("showGrowthValues"),
+  ruleSummary: document.getElementById("ruleSummary"),
   resetView: document.getElementById("resetView"),
   planCanvas: document.getElementById("planCanvas"),
   threeRoot: document.getElementById("threeRoot"),
@@ -40,16 +39,14 @@ function assertDomBindings(bindings) {
 
 assertDomBindings(dom);
 
-let state = null;
-let currentModel = null;
-
 const DEFAULT_VISUAL = {
-  profileWidth: 2.2,
-  axisWidth: 1,
-  pointSize: 2.4,
+  profileWidth: 1.8,
+  axisWidth: 0.9,
+  pointSize: 2.2,
   annotationSize: 10,
+  showTiles: true,
   showProfiles: true,
-  showPointMarkers: true,
+  showPointMarkers: false,
   showAnnotations: false,
   showGrowthArrows: true,
   showGrowthValues: false,
@@ -62,6 +59,26 @@ const planView = {
   panY: 0,
 };
 
+let selectedPreset = PRESET_ORDER[0];
+let state = null;
+let currentModel = null;
+
+function presetFromUrl() {
+  const raw = new URLSearchParams(window.location.search).get("preset");
+  if (!raw) {
+    return null;
+  }
+  const normalized = raw.trim().toLowerCase();
+  return PRESET_ORDER.find((key) => {
+    const preset = PRESETS[key];
+    return (
+      key.toLowerCase() === normalized ||
+      preset?.id?.toLowerCase() === normalized ||
+      preset?.name?.toLowerCase() === normalized
+    );
+  }) ?? null;
+}
+
 function readNumber(value, fallback) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -71,122 +88,165 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
+function normalizeRules(source = {}) {
+  return {
+    orthogonal: source.orthogonal ?? source.orth1 ?? "b,c,b,v",
+    diagonal: source.diagonal ?? source.diag1 ?? "b,c",
+    secondary: source.secondary ?? source.secondary1 ?? "a,a,d",
+  };
+}
+
 function normalizePreset(rawState) {
   const source = rawState ?? {};
-  const rules = source.rules ?? {};
   return {
+    id: source.id ?? "haci-kilic",
+    name: source.name ?? "Haci Kilic Mosque",
+    location: source.location ?? "Kayseri",
+    cadence: source.cadence ?? "Recursive octagonal growth",
+    sourceFigure: source.sourceFigure ?? "",
+    description: source.description ?? "",
     scope: "full",
-    layers: readNumber(source.layers, 3),
-    layerHeight: readNumber(source.layerHeight, 1),
+    layers: clamp(Math.round(readNumber(source.layers, 8)), 1, 24),
+    layerHeight: clamp(readNumber(source.layerHeight, 1), 0.1, 3),
     heightPattern: typeof source.heightPattern === "string" ? source.heightPattern : "1,1,1",
-    ratioScale: readNumber(source.ratioScale, 1),
-    collisionEpsilon: readNumber(source.collisionEpsilon, 0.05),
+    ratioScale: clamp(readNumber(source.ratioScale, 1), 0.25, 2.5),
+    collisionEpsilon: clamp(readNumber(source.collisionEpsilon, 0.05), 0.005, 1),
+    convergenceEpsilon: clamp(readNumber(source.convergenceEpsilon, 0), 0, 1),
+    branchAngles: source.branchAngles ?? null,
+    stopSecondaryOnVertical: source.stopSecondaryOnVertical === true,
+    stopSecondaryBranches: source.stopSecondaryBranches === true,
+    continueCenterBranchesOnly: source.continueCenterBranchesOnly === true,
+    connectionType: source.connectionType === "divergent" ? "divergent" : "convergent",
     ratios: silverRatioUnits(1),
-    rules: {
-      orthogonal: rules.orthogonal ?? rules.orth1 ?? "b,c,b,0",
-      diagonal: rules.diagonal ?? rules.diag1 ?? "b,c",
-      secondary: rules.secondary ?? rules.secondary1 ?? "a,a,d",
-    },
+    rules: normalizeRules(source.rules),
+    rulePhases: Array.isArray(source.rulePhases) ? source.rulePhases : null,
   };
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function formatLayerRange(phase) {
+  const from = Math.max(1, Math.round(Number(phase.fromLayer) || 1));
+  const rawTo = Number(phase.toLayer);
+  if (!Number.isFinite(rawTo)) {
+    return `L${from}+`;
+  }
+  return from === rawTo ? `L${from}` : `L${from}-L${Math.round(rawTo)}`;
+}
+
+function ruleLine(label, value) {
+  return `<span>${label}</span><code>${escapeHtml(value)}</code>`;
+}
+
+function renderRuleSummary(nextState) {
+  const phases = Array.isArray(nextState.rulePhases) && nextState.rulePhases.length
+    ? nextState.rulePhases
+    : [{
+      name: "All layers",
+      fromLayer: 1,
+      rules: nextState.rules,
+    }];
+
+  dom.ruleSummary.innerHTML = phases.map((phase) => {
+    const rules = normalizeRules(phase.rules);
+    return `
+      <div class="rule-card">
+        <div class="rule-card-title">
+          <strong>${escapeHtml(phase.name ?? "Rule")}</strong>
+          <span>${escapeHtml(formatLayerRange(phase))}</span>
+        </div>
+        <div class="rule-grid">
+          ${ruleLine("Orthogonal", rules.orthogonal)}
+          ${ruleLine("Diagonal", rules.diagonal)}
+          ${ruleLine("Secondary", rules.secondary)}
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+function populatePresets() {
+  dom.presetSelect.innerHTML = "";
+  for (const key of PRESET_ORDER) {
+    const preset = PRESETS[key];
+    const option = document.createElement("option");
+    option.value = key;
+    option.textContent = preset?.name ?? key;
+    dom.presetSelect.appendChild(option);
+  }
+}
+
+function syncOutputs() {
+  dom.layersValue.value = `${dom.layers.value} layers`;
+  dom.layerHeightValue.value = Number(dom.layerHeight.value).toFixed(2);
+  dom.ratioScaleValue.value = `${Number(dom.ratioScale.value).toFixed(2)}x`;
 }
 
 function applyStateToControls(nextState) {
-  const safe = normalizePreset(nextState);
-
-  dom.scope.value = "full";
-  dom.layers.value = String(safe.layers);
-  dom.layerHeight.value = String(safe.layerHeight);
-  dom.heightPattern.value = safe.heightPattern;
-  dom.ratioScale.value = String(safe.ratioScale);
-  dom.collisionEpsilon.value = String(safe.collisionEpsilon);
-  dom.ruleOrthogonal.value = safe.rules.orthogonal;
-  dom.ruleDiagonal.value = safe.rules.diagonal;
-  dom.ruleSecondary.value = safe.rules.secondary;
+  dom.presetSelect.value = selectedPreset;
+  dom.presetName.textContent = nextState.name;
+  dom.presetLocation.textContent = nextState.location;
+  dom.presetCadence.textContent = nextState.cadence;
+  dom.presetFigure.textContent = nextState.sourceFigure;
+  dom.presetDescription.textContent = nextState.description;
+  dom.layers.value = String(nextState.layers);
+  dom.layerHeight.value = String(nextState.layerHeight);
+  dom.ratioScale.value = String(nextState.ratioScale);
+  dom.connectionType.value = nextState.connectionType;
+  dom.showTiles.checked = DEFAULT_VISUAL.showTiles;
+  dom.showProfiles.checked = DEFAULT_VISUAL.showProfiles;
+  dom.showPointMarkers.checked = DEFAULT_VISUAL.showPointMarkers;
+  dom.showAnnotations.checked = DEFAULT_VISUAL.showAnnotations;
+  dom.showGrowthArrows.checked = DEFAULT_VISUAL.showGrowthArrows;
+  syncOutputs();
+  renderRuleSummary(nextState);
 }
 
 function collectStateFromControls() {
-  return {
-    scope: "full",
-    layers: readNumber(dom.layers.value, 3),
-    layerHeight: readNumber(dom.layerHeight.value, 1),
-    heightPattern: dom.heightPattern.value,
-    ratioScale: readNumber(dom.ratioScale.value, 1),
-    collisionEpsilon: readNumber(dom.collisionEpsilon.value, 0.05),
-    ratios: silverRatioUnits(1),
-    rules: {
-      orthogonal: dom.ruleOrthogonal.value,
-      diagonal: dom.ruleDiagonal.value,
-      secondary: dom.ruleSecondary.value,
-    },
-  };
-}
-
-function normalizeVisual(rawVisual) {
-  const source = rawVisual ?? {};
-  return {
-    profileWidth: clamp(readNumber(source.profileWidth, DEFAULT_VISUAL.profileWidth), 0.2, 8),
-    axisWidth: clamp(readNumber(source.axisWidth, DEFAULT_VISUAL.axisWidth), 0.2, 6),
-    pointSize: clamp(readNumber(source.pointSize, DEFAULT_VISUAL.pointSize), 0.4, 10),
-    annotationSize: clamp(readNumber(source.annotationSize, DEFAULT_VISUAL.annotationSize), 7, 24),
-    showProfiles: source.showProfiles !== false,
-    showPointMarkers: source.showPointMarkers !== false,
-    showAnnotations: source.showAnnotations !== false,
-    showGrowthArrows: source.showGrowthArrows !== false,
-    showGrowthValues: source.showGrowthValues !== false,
-  };
-}
-
-function formatSliderValue(value) {
-  return Number(value).toFixed(1);
-}
-
-function syncLineweightOutputs(rawVisual) {
-  const visual = normalizeVisual(rawVisual);
-  dom.profileWidthValue.value = formatSliderValue(visual.profileWidth);
-  dom.axisWidthValue.value = formatSliderValue(visual.axisWidth);
-}
-
-function applyVisualToControls(rawVisual) {
-  const visual = normalizeVisual(rawVisual);
-  dom.profileWidth.value = String(visual.profileWidth);
-  dom.axisWidth.value = String(visual.axisWidth);
-  dom.pointSize.value = String(visual.pointSize);
-  dom.annotationSize.value = String(visual.annotationSize);
-  dom.showProfiles.checked = visual.showProfiles;
-  dom.showPointMarkers.checked = visual.showPointMarkers;
-  dom.showAnnotations.checked = visual.showAnnotations;
-  dom.showGrowthArrows.checked = visual.showGrowthArrows;
-  dom.showGrowthValues.checked = visual.showGrowthValues;
-  syncLineweightOutputs(visual);
+  return normalizePreset({
+    ...state,
+    layers: readNumber(dom.layers.value, state.layers),
+    layerHeight: readNumber(dom.layerHeight.value, state.layerHeight),
+    ratioScale: readNumber(dom.ratioScale.value, state.ratioScale),
+    connectionType: dom.connectionType.value,
+  });
 }
 
 function collectVisualFromControls() {
-  const visual = normalizeVisual({
-    profileWidth: dom.profileWidth.value,
-    axisWidth: dom.axisWidth.value,
-    pointSize: dom.pointSize.value,
-    annotationSize: dom.annotationSize.value,
+  return {
+    ...DEFAULT_VISUAL,
+    showTiles: dom.showTiles.checked,
     showProfiles: dom.showProfiles.checked,
     showPointMarkers: dom.showPointMarkers.checked,
     showAnnotations: dom.showAnnotations.checked,
     showGrowthArrows: dom.showGrowthArrows.checked,
-    showGrowthValues: dom.showGrowthValues.checked,
-  });
-  syncLineweightOutputs(visual);
-  return visual;
+  };
 }
 
 function refresh(autoFrame = false) {
-  state = normalizePreset(collectStateFromControls());
-  const visual = collectVisualFromControls();
+  state = collectStateFromControls();
+  syncOutputs();
   currentModel = generateMuqarnas(state);
+  const visual = collectVisualFromControls();
   renderPlan(dom.planCanvas, currentModel, state.scope, visual, planView);
   threeView.setModel(currentModel, state.scope, autoFrame, visual);
 }
-state = normalizePreset(clonePreset("Haci Kilic"));
-applyStateToControls(state);
-applyVisualToControls(DEFAULT_VISUAL);
-refresh(true);
+
+function loadPreset(key) {
+  selectedPreset = key;
+  state = normalizePreset(clonePreset(key));
+  planView.zoom = 1;
+  planView.panX = 0;
+  planView.panY = 0;
+  applyStateToControls(state);
+  refresh(true);
+}
 
 function bindPlanInteractions() {
   const canvas = dom.planCanvas;
@@ -254,23 +314,34 @@ function bindPlanInteractions() {
   });
 }
 
+populatePresets();
 bindPlanInteractions();
+selectedPreset = presetFromUrl() ?? selectedPreset;
+loadPreset(selectedPreset);
 
-const controls = document.querySelectorAll("input, select");
-for (const control of controls) {
-  control.addEventListener("input", () => {
-    refresh(false);
-  });
-  control.addEventListener("change", () => {
-    refresh(false);
-  });
+dom.presetSelect.addEventListener("change", () => {
+  loadPreset(dom.presetSelect.value);
+});
+
+for (const control of [
+  dom.layers,
+  dom.layerHeight,
+  dom.ratioScale,
+  dom.connectionType,
+  dom.showTiles,
+  dom.showProfiles,
+  dom.showPointMarkers,
+  dom.showAnnotations,
+  dom.showGrowthArrows,
+]) {
+  control.addEventListener("input", () => refresh(false));
+  control.addEventListener("change", () => refresh(false));
 }
 
 dom.resetView.addEventListener("click", () => {
-  if (!currentModel) {
-    return;
+  if (currentModel) {
+    threeView.resetView();
   }
-  threeView.resetView();
 });
 
 window.addEventListener("resize", () => {

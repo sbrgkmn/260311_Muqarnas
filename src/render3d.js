@@ -1,12 +1,13 @@
 import * as THREE from "https://esm.sh/three@0.164.1";
 import { OrbitControls } from "https://esm.sh/three@0.164.1/examples/jsm/controls/OrbitControls.js";
-import { getScopeRange } from "./engine.js?v=20260325e";
-import { rgbToUnit, shadeRgb } from "./tileColors.js?v=20260325e";
+import { getScopeRange } from "./engine.js?v=20260501b";
+import { rgbToUnit, shadeRgb } from "./tileColors.js?v=20260501b";
 
 const DEFAULT_VISUAL = {
   profileWidth: 2.2,
   axisWidth: 1,
   pointSize: 2.4,
+  showTiles: true,
   showProfiles: true,
   showPointMarkers: true,
 };
@@ -21,6 +22,7 @@ function normalizeVisual(rawVisual) {
     profileWidth: clamp(Number(source.profileWidth) || DEFAULT_VISUAL.profileWidth, 0.2, 8),
     axisWidth: clamp(Number(source.axisWidth) || DEFAULT_VISUAL.axisWidth, 0.2, 6),
     pointSize: clamp(Number(source.pointSize) || DEFAULT_VISUAL.pointSize, 0.4, 10),
+    showTiles: source.showTiles !== false,
     showProfiles: source.showProfiles !== false,
     showPointMarkers: source.showPointMarkers !== false,
   };
@@ -97,6 +99,44 @@ function segmentInScope(segment, scope) {
   return angle <= scopeMaxAngle(scope) + eps;
 }
 
+function faceInScope(face, scope) {
+  return (face.vertices ?? []).some((point) => pointInScope(point, scope));
+}
+
+function tileColorForLayer(layer, total) {
+  const t = total <= 1 ? 0 : layer / total;
+  const warm = { r: 212, g: 177, b: 132 };
+  const cool = { r: 116, g: 154, b: 158 };
+  return new THREE.Color(
+    (warm.r + (cool.r - warm.r) * t) / 255,
+    (warm.g + (cool.g - warm.g) * t) / 255,
+    (warm.b + (cool.b - warm.b) * t) / 255,
+  );
+}
+
+function faceVertices(face) {
+  return face.vertices ?? [face.a, face.b, face.c].filter(Boolean);
+}
+
+function triangleVertexSets(vertices, connectionType) {
+  if (vertices.length === 3) {
+    return [[vertices[0], vertices[1], vertices[2]]];
+  }
+  if (vertices.length !== 4) {
+    return [];
+  }
+  if (connectionType === "divergent") {
+    return [
+      [vertices[0], vertices[1], vertices[2]],
+      [vertices[0], vertices[2], vertices[3]],
+    ];
+  }
+  return [
+    [vertices[0], vertices[1], vertices[3]],
+    [vertices[1], vertices[2], vertices[3]],
+  ];
+}
+
 function segmentDisplayAxis(segment) {
   if (!segment || !segment.a || !segment.b) {
     return segment?.axis ?? "orthogonal";
@@ -140,6 +180,8 @@ export class Muqarnas3DView {
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(window.devicePixelRatio || 1);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.domElement.style.width = "100%";
     this.renderer.domElement.style.height = "100%";
     this.renderer.domElement.style.touchAction = "none";
@@ -150,19 +192,45 @@ export class Muqarnas3DView {
     this.controls.dampingFactor = 0.06;
     this.controls.target.set(0, -2, 0);
 
-    const ambient = new THREE.HemisphereLight("#fff8e8", "#493a2e", 1.0);
+    const ambient = new THREE.HemisphereLight("#fff8e8", "#52615f", 0.72);
     this.scene.add(ambient);
 
-    const key = new THREE.DirectionalLight("#ffffff", 0.8);
-    key.position.set(8, 12, 9);
+    const key = new THREE.DirectionalLight("#ffffff", 1.15);
+    key.position.set(8, 13, 9);
+    key.castShadow = true;
+    key.shadow.mapSize.width = 2048;
+    key.shadow.mapSize.height = 2048;
+    key.shadow.camera.near = 0.5;
+    key.shadow.camera.far = 80;
+    key.shadow.camera.left = -24;
+    key.shadow.camera.right = 24;
+    key.shadow.camera.top = 24;
+    key.shadow.camera.bottom = -24;
+    key.shadow.bias = -0.0005;
     this.scene.add(key);
 
-    const fill = new THREE.DirectionalLight("#f7f1dd", 0.45);
+    const fill = new THREE.DirectionalLight("#dcefed", 0.35);
     fill.position.set(-7, 6, -5);
     this.scene.add(fill);
 
+    const rim = new THREE.DirectionalLight("#fff5df", 0.28);
+    rim.position.set(-5, 8, 7);
+    this.scene.add(rim);
+
     this.group = new THREE.Group();
     this.scene.add(this.group);
+
+    const shadowGeometry = new THREE.PlaneGeometry(80, 80);
+    shadowGeometry.rotateX(-Math.PI / 2);
+    const shadowMaterial = new THREE.ShadowMaterial({
+      color: "#2f2a25",
+      opacity: 0.16,
+      transparent: true,
+    });
+    this.shadowPlane = new THREE.Mesh(shadowGeometry, shadowMaterial);
+    this.shadowPlane.receiveShadow = true;
+    this.shadowPlane.position.y = -8.02;
+    this.scene.add(this.shadowPlane);
 
     this.grid = new THREE.GridHelper(24, 24, "#dbcdb8", "#eee3d5");
     this.grid.position.y = -8;
@@ -179,16 +247,18 @@ export class Muqarnas3DView {
   disposeGroup() {
     while (this.group.children.length) {
       const child = this.group.children.pop();
-      if (child.geometry) {
-        child.geometry.dispose();
-      }
-      if (child.material) {
-        if (Array.isArray(child.material)) {
-          child.material.forEach((material) => material.dispose());
-        } else {
-          child.material.dispose();
+      child.traverse((item) => {
+        if (item.geometry) {
+          item.geometry.dispose();
         }
-      }
+        if (item.material) {
+          if (Array.isArray(item.material)) {
+            item.material.forEach((material) => material.dispose());
+          } else {
+            item.material.dispose();
+          }
+        }
+      });
     }
   }
 
@@ -227,6 +297,83 @@ export class Muqarnas3DView {
       const color = model.axisColors[first?.axis] ?? "#5e5447";
       const material = new THREE.LineBasicMaterial({ color, linewidth: visual.axisWidth });
       group.add(new THREE.Line(geometry, material));
+    }
+
+    return group;
+  }
+
+  buildTileSurfaces(model, scope, visual) {
+    const group = new THREE.Group();
+    const tileLayers = model.displayTileLayers ?? model.tileLayers;
+    if (!visual.showTiles || !Array.isArray(tileLayers)) {
+      return group;
+    }
+
+    const total = Math.max(1, tileLayers.length - 1);
+    for (const tileLayer of tileLayers) {
+      const faces = tileLayer.faces ?? tileLayer.triangles ?? [];
+      if (!faces.length) {
+        continue;
+      }
+
+      const positions = [];
+      const edgePositions = [];
+      const connectionType = tileLayer.connectionType ?? model.params?.connectionType ?? "convergent";
+      for (const face of faces) {
+        const vertices = faceVertices(face);
+        if (vertices.length < 3 || !faceInScope({ vertices }, scope)) {
+          continue;
+        }
+
+        for (const triangle of triangleVertexSets(vertices, connectionType)) {
+          for (const point of triangle) {
+            const p = vector(point);
+            positions.push(p.x, p.y, p.z);
+          }
+        }
+
+        for (let i = 0; i < vertices.length; i += 1) {
+          const a = vector(vertices[i]);
+          const b = vector(vertices[(i + 1) % vertices.length]);
+          edgePositions.push(a.x, a.y, a.z, b.x, b.y, b.z);
+        }
+      }
+
+      if (!positions.length) {
+        continue;
+      }
+
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+      geometry.computeVertexNormals();
+
+      const material = new THREE.MeshStandardMaterial({
+        color: tileColorForLayer(tileLayer.layer ?? 0, total),
+        roughness: 0.72,
+        metalness: 0.02,
+        transparent: true,
+        opacity: 0.82,
+        side: THREE.DoubleSide,
+        depthWrite: true,
+        flatShading: true,
+        polygonOffset: true,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 1,
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      group.add(mesh);
+
+      const edgeGeometry = new THREE.BufferGeometry();
+      edgeGeometry.setAttribute("position", new THREE.Float32BufferAttribute(edgePositions, 3));
+      const edgeMaterial = new THREE.LineBasicMaterial({
+        color: "#263330",
+        transparent: true,
+        opacity: 0.28,
+        depthTest: true,
+      });
+      group.add(new THREE.LineSegments(edgeGeometry, edgeMaterial));
     }
 
     return group;
@@ -329,7 +476,9 @@ export class Muqarnas3DView {
     this.camera.position.set(center.x + dist, center.y + dist * 0.8, center.z + dist);
     this.controls.target.copy(center);
     this.controls.update();
-    this.grid.position.y = box.min.y - 0.8;
+    const floorY = box.min.y - 0.8;
+    this.grid.position.y = floorY + 0.01;
+    this.shadowPlane.position.y = floorY;
   }
 
   setModel(model, scope, autoFrame = false, rawVisual = {}) {
@@ -339,6 +488,9 @@ export class Muqarnas3DView {
     if (!model) {
       return;
     }
+
+    const tiles = this.buildTileSurfaces(model, scope, visual);
+    this.group.add(tiles);
 
     const axes = this.buildAxisLines(model, scope, visual);
     this.group.add(axes);

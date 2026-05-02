@@ -9,133 +9,125 @@
   <body>
     <div class="app-shell">
       <aside class="controls">
-        <h1>Recursive Muqarnas Generator</h1>
-        <p class="subtitle">Three-axis recursive growth (orthogonal, diagonal, secondary) with 22.5 deg branch clock and collision-aware convergence.</p>
+        <h1>Recursive Muqarnas Models</h1>
+        <p class="subtitle">Octagonal Seljuk case studies from Kayseri and Sivas.</p>
 
         <div class="control-grid">
           <label>
-            Dome Scope
-            <select id="scope" disabled>
-              <option value="full" selected>Full Dome (360 deg)</option>
-            </select>
+            Case Study
+            <select id="presetSelect"></select>
           </label>
+
+          <section class="preset-panel" aria-live="polite">
+            <div>
+              <h2 id="presetName"></h2>
+              <p id="presetDescription"></p>
+            </div>
+            <dl>
+              <div>
+                <dt>Location</dt>
+                <dd id="presetLocation"></dd>
+              </div>
+              <div>
+                <dt>Pattern</dt>
+                <dd id="presetCadence"></dd>
+              </div>
+              <div>
+                <dt>Source</dt>
+                <dd id="presetFigure"></dd>
+              </div>
+            </dl>
+          </section>
+
+          <h3 class="group-title">Model</h3>
 
           <label>
             Layers
-            <input id="layers" type="number" min="1" max="120" step="1" />
-          </label>
-
-          <label>
-            Layer Height Scale
-            <input id="layerHeight" type="number" min="0" max="5" step="0.05" />
-          </label>
-
-          <label>
-            Height Pattern
-            <input id="heightPattern" type="text" placeholder="1,1,1" />
-          </label>
-
-          <label>
-            Global Ratio Scale
-            <input id="ratioScale" type="number" min="0.05" max="10" step="0.05" />
-          </label>
-
-          <label>
-            Collision Epsilon
-            <input id="collisionEpsilon" type="number" min="0.005" max="1" step="0.005" />
-          </label>
-
-          <label>
-            Orthogonal Rule
-            <input id="ruleOrthogonal" type="text" />
-          </label>
-
-          <label>
-            Diagonal Rule
-            <input id="ruleDiagonal" type="text" />
-          </label>
-
-          <label>
-            Secondary Rule
-            <input id="ruleSecondary" type="text" />
-          </label>
-
-          <h3 class="group-title">Graphics</h3>
-
-          <label>
-            Layer Line Weight
             <div class="inline-row">
-              <input id="profileWidth" type="range" min="0.2" max="8" step="0.1" />
-              <output id="profileWidthValue" for="profileWidth"></output>
+              <input id="layers" type="range" min="1" max="18" step="1" />
+              <output id="layersValue" for="layers"></output>
             </div>
           </label>
 
           <label>
-            Axis Line Weight
+            Layer Height
             <div class="inline-row">
-              <input id="axisWidth" type="range" min="0.2" max="6" step="0.1" />
-              <output id="axisWidthValue" for="axisWidth"></output>
+              <input id="layerHeight" type="range" min="0.25" max="2.5" step="0.05" />
+              <output id="layerHeightValue" for="layerHeight"></output>
             </div>
           </label>
 
           <label>
-            Point Marker Size
-            <input id="pointSize" type="number" min="0.4" max="10" step="0.1" />
+            Silver-Ratio Scale
+            <div class="inline-row">
+              <input id="ratioScale" type="range" min="0.4" max="2.2" step="0.05" />
+              <output id="ratioScaleValue" for="ratioScale"></output>
+            </div>
           </label>
 
           <label>
-            Annotation Size
-            <input id="annotationSize" type="number" min="7" max="24" step="1" />
+            Tile Diagonal
+            <select id="connectionType">
+              <option value="convergent">Convergent</option>
+              <option value="divergent">Divergent</option>
+            </select>
+          </label>
+
+          <h3 class="group-title">Display</h3>
+
+          <label class="inline-check">
+            <input id="showTiles" type="checkbox" checked />
+            <span>Tile surfaces</span>
           </label>
 
           <label class="inline-check">
             <input id="showProfiles" type="checkbox" checked />
-            <span>Show Layer Profiles</span>
-          </label>
-
-          <label class="inline-check">
-            <input id="showPointMarkers" type="checkbox" checked />
-            <span>Show Point Markers</span>
-          </label>
-
-          <label class="inline-check">
-            <input id="showAnnotations" type="checkbox" />
-            <span>Show Point Labels</span>
+            <span>Layer profiles</span>
           </label>
 
           <label class="inline-check">
             <input id="showGrowthArrows" type="checkbox" checked />
-            <span>Show Growth Arrows</span>
+            <span>Growth axes</span>
           </label>
 
           <label class="inline-check">
-            <input id="showGrowthValues" type="checkbox" />
-            <span>Show Growth Values</span>
+            <input id="showPointMarkers" type="checkbox" />
+            <span>Point markers</span>
           </label>
 
-          <button id="resetView" type="button">Reset 3D Camera</button>
+          <label class="inline-check">
+            <input id="showAnnotations" type="checkbox" />
+            <span>Point labels</span>
+          </label>
+
+          <details>
+            <summary>Recursive rules</summary>
+            <div id="ruleSummary" class="rule-summary"></div>
+          </details>
+
+          <button id="resetView" type="button">Reset Camera</button>
         </div>
       </aside>
 
       <main class="viewer-shell">
         <section class="panel">
           <header>
-            <h2>Plan View</h2>
-            <p>Recursive plan propagation and growth axes.</p>
+            <h2>2D Plan</h2>
+            <p>Layer contours, minimal face bands, and recursive axes.</p>
           </header>
           <canvas id="planCanvas"></canvas>
         </section>
 
         <section class="panel">
           <header>
-            <h2>3D Muqarnas</h2>
-            <p>Layered recursive growth skeleton.</p>
+            <h2>3D Model</h2>
+            <p>Stacked surfaces generated from the same recursive rule set.</p>
           </header>
           <div id="threeRoot"></div>
         </section>
       </main>
     </div>
 
-    <script type="module" src="./src/main.js?v=20260325e"></script>
+    <script type="module" src="./src/main.js?v=20260501b"></script>
   </body>
 </html>
